@@ -11,7 +11,7 @@ const inter = Inter({
 const themeInitScript = `(function(){try{var t=localStorage.getItem('demandaccel_theme');if(t==='dark'||(!t&&window.matchMedia('(prefers-color-scheme: dark)').matches)){document.documentElement.classList.add('dark')}}catch(e){}})();`;
 
 export const metadata: Metadata = {
-  title: "DemandAccel AI",
+  title: "DemandAccel AI - Dashboard",
   description: "Demand acceleration platform with role-based access control",
 };
 

@@ -11,11 +11,11 @@ import {
   LogOut,
   UserSearch,
   Users,
-  Zap,
 } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { ROLE_LABELS, type User, logout } from "@/lib/api"
 import { cn } from "@/lib/utils"
+import { useTheme } from "@/components/theme-provider"
 
 type NavItem = {
   href: string
@@ -39,14 +39,9 @@ const ALL_ROLES: User["role"][] = [
 
 const NAV_GROUPS: NavGroup[] = [
   {
-    label: "Workspace",
+    label: "Main Menu",
     items: [
       { href: "/", label: "Dashboard", icon: LayoutDashboard, roles: ALL_ROLES },
-    ],
-  },
-  {
-    label: "Analysis",
-    items: [
       {
         href: "/jobs",
         label: "Job Explorer",
@@ -59,13 +54,13 @@ const NAV_GROUPS: NavGroup[] = [
         icon: UserSearch,
         roles: ["ADMIN", "MARKET_ANALYST"],
       },
+      { href: "/admin/users", label: "User Management", icon: Users, roles: ["ADMIN"] },
+      { href: "/admin/sources", label: "Source Management", icon: Cable, roles: ["ADMIN"] },
     ],
   },
   {
-    label: "Administration",
+    label: "Other Menu",
     items: [
-      { href: "/admin/users", label: "User Management", icon: Users, roles: ["ADMIN"] },
-      { href: "/admin/sources", label: "Source Management", icon: Cable, roles: ["ADMIN"] },
       {
         href: "/admin/enrichment-sources",
         label: "Enrichment Sources",
@@ -98,6 +93,7 @@ function SidebarNav({
 }) {
   const pathname = usePathname()
   const router = useRouter()
+  const { theme } = useTheme()
 
   async function handleLogout() {
     await logout()
@@ -107,31 +103,32 @@ function SidebarNav({
   const isActive = (href: string) =>
     pathname === href || (href !== "/" && pathname.startsWith(href))
 
+  const logoSrc = theme === "dark" ? "/dark-theme-logo.png" : "/light-theme-logo.png"
+
   return (
-    <div className="flex h-full flex-col">
+    <div className="flex h-full flex-col bg-card">
       <Link
         href="/"
         onClick={onNavigate}
-        className="flex h-14 shrink-0 items-center gap-2.5 border-b border-sidebar-border px-5"
+        className="flex h-16 shrink-0 items-center gap-2.5 border-b border-sidebar-border px-5"
       >
-        <span className="flex size-8 items-center justify-center rounded-lg bg-primary text-primary-foreground shadow-sm">
-          <Zap className="size-4" />
-        </span>
-        <span className="text-sm font-semibold tracking-tight">
-          DemandAccel AI
-        </span>
+        <img
+          src={logoSrc}
+          alt="DemandAccel AI"
+          className="h-8 w-auto object-contain"
+        />
       </Link>
 
-      <nav className="flex-1 space-y-5 overflow-y-auto px-3 py-4">
+      <nav className="flex-1 space-y-6 overflow-y-auto px-3 py-5">
         {NAV_GROUPS.map((group) => {
           const items = group.items.filter((item) => item.roles.includes(user.role))
           if (items.length === 0) return null
           return (
             <div key={group.label}>
-              <p className="px-3 pb-1.5 text-[11px] font-semibold tracking-wider text-sidebar-foreground/60 uppercase">
+              <p className="px-3 pb-2 text-xs font-semibold tracking-wider text-muted-foreground uppercase">
                 {group.label}
               </p>
-              <div className="space-y-0.5">
+              <div className="space-y-1">
                 {items.map((item) => {
                   const active = isActive(item.href)
                   return (
@@ -141,21 +138,16 @@ function SidebarNav({
                       onClick={onNavigate}
                       aria-current={active ? "page" : undefined}
                       className={cn(
-                        "group relative flex h-9 items-center gap-2.5 rounded-lg px-3 text-sm font-medium text-sidebar-foreground transition-colors hover:bg-sidebar-accent hover:text-sidebar-accent-foreground",
-                        active &&
-                          "bg-sidebar-accent text-sidebar-accent-foreground",
+                        "group relative flex h-10 items-center gap-3 rounded-xl px-3 text-sm font-medium transition-all duration-200",
+                        active
+                          ? "bg-primary text-primary-foreground shadow-md shadow-primary/20"
+                          : "text-sidebar-foreground hover:bg-sidebar-accent hover:text-sidebar-accent-foreground",
                       )}
                     >
-                      <span
-                        className={cn(
-                          "absolute top-1/2 left-0 h-5 w-0.5 -translate-y-1/2 rounded-full bg-primary transition-opacity",
-                          active ? "opacity-100" : "opacity-0",
-                        )}
-                      />
                       <item.icon
                         className={cn(
-                          "size-4 shrink-0 transition-colors",
-                          active && "text-primary",
+                          "size-[18px] shrink-0 transition-colors",
+                          active && "text-primary-foreground",
                         )}
                       />
                       {item.label}
@@ -168,27 +160,46 @@ function SidebarNav({
         })}
       </nav>
 
+      <div className="shrink-0 px-3 pb-3">
+        <div className="rounded-2xl promo-card-bg p-4 text-white">
+          <div className="flex items-start gap-3">
+            <div className="flex-1">
+              <p className="text-sm font-bold">Unlimited Access</p>
+              <p className="mt-1 text-xs text-white/80">
+                Get full access to all features and priority support
+              </p>
+            </div>
+          </div>
+          <Button
+            variant="secondary"
+            size="sm"
+            className="mt-3 w-full bg-white/20 text-white hover:bg-white/30 border-white/20"
+          >
+            Upgrade Now
+          </Button>
+        </div>
+      </div>
+
       <div className="shrink-0 border-t border-sidebar-border p-3">
-        <div className="flex items-center gap-2.5 rounded-lg px-2 py-1.5">
-          <span className="flex size-8 shrink-0 items-center justify-center rounded-full bg-gradient-to-br from-primary to-chart-3 text-[11px] font-bold text-primary-foreground">
+        <div className="flex items-center gap-3 rounded-xl px-2 py-2">
+          <span className="flex size-9 shrink-0 items-center justify-center rounded-full bg-primary/10 text-xs font-bold text-primary">
             {getInitials(user)}
           </span>
-          <div className="min-w-0">
-            <p className="truncate text-sm font-medium">
+          <div className="min-w-0 flex-1">
+            <p className="truncate text-sm font-semibold">
               {user.first_name || user.username}
             </p>
-            <p className="truncate text-xs text-sidebar-foreground/60">
+            <p className="truncate text-xs text-muted-foreground">
               {ROLE_LABELS[user.role]}
             </p>
           </div>
         </div>
         <Button
           variant="ghost"
-          className="mt-1 w-full justify-start text-sidebar-foreground/70 hover:bg-sidebar-accent hover:text-sidebar-accent-foreground"
+          className="mt-1 w-full justify-start gap-2.5 rounded-xl text-muted-foreground hover:bg-sidebar-accent hover:text-sidebar-accent-foreground"
           onClick={handleLogout}
-          data-icon="inline-start"
         >
-          <LogOut data-icon="inline-start" />
+          <LogOut className="size-4" />
           Sign out
         </Button>
       </div>
@@ -207,7 +218,7 @@ export function Sidebar({
 }) {
   return (
     <>
-      <aside className="fixed inset-y-0 left-0 z-40 hidden w-60 border-r border-sidebar-border bg-sidebar lg:block">
+      <aside className="fixed inset-y-0 left-0 z-40 hidden w-64 border-r border-sidebar-border bg-sidebar shadow-sm lg:block">
         <SidebarNav user={user} />
       </aside>
 

@@ -2,8 +2,9 @@
 
 import Link from "next/link"
 import { usePathname, useRouter } from "next/navigation"
-import { LogOut, Menu as MenuIcon, Zap } from "lucide-react"
+import { Bell, LogOut, Menu as MenuIcon, Search, Zap } from "lucide-react"
 import { Button } from "@/components/ui/button"
+import { Input } from "@/components/ui/input"
 import { ThemeToggle } from "@/components/theme-toggle"
 import { ROLE_LABELS, type User, logout } from "@/lib/api"
 import { NAV_GROUPS } from "@/components/sidebar"
@@ -50,8 +51,8 @@ export function Navbar({
   const title = getPageTitle(pathname)
 
   return (
-    <header className="sticky top-0 z-30 h-14 shrink-0 border-b bg-background/80 backdrop-blur-md supports-[backdrop-filter]:bg-background/60">
-      <div className="mx-auto flex h-full w-full max-w-6xl items-center gap-2 px-4 sm:px-6">
+    <header className="sticky top-0 z-30 h-16 shrink-0 border-b border-border bg-card/80 backdrop-blur-md supports-[backdrop-filter]:bg-card/60">
+      <div className="mx-auto flex h-full w-full items-center gap-4 px-4 sm:px-6">
         <Button
           variant="ghost"
           size="icon-sm"
@@ -66,41 +67,49 @@ export function Navbar({
           href="/"
           className="flex shrink-0 items-center gap-2 lg:hidden"
         >
-          <span className="flex size-7 items-center justify-center rounded-lg bg-primary text-primary-foreground">
-            <Zap className="size-3.5" />
+          <span className="flex size-8 items-center justify-center rounded-xl bg-primary text-primary-foreground">
+            <Zap className="size-4" />
           </span>
         </Link>
 
-        <div className="hidden min-w-0 items-center gap-2 sm:flex">
-          <span className="text-sm text-muted-foreground">DemandAccel AI</span>
-          <span className="text-muted-foreground/40">/</span>
-          <span className="truncate text-sm font-semibold tracking-tight">
+        <div className="flex flex-col min-w-0">
+          <h1 className="text-lg font-bold tracking-tight text-foreground">
             {title}
-          </span>
+          </h1>
+          <p className="text-xs text-muted-foreground hidden sm:block">
+            Get the latest update for 7 days
+          </p>
         </div>
 
-        <div className="ml-auto flex shrink-0 items-center gap-1.5 sm:gap-2">
-          <div className="hidden items-center gap-2 md:flex">
-            <span className="flex size-7 items-center justify-center rounded-full bg-gradient-to-br from-primary to-chart-3 text-[10px] font-bold text-primary-foreground">
-              {getInitials(user)}
-            </span>
-            <span className="hidden text-sm font-medium xl:block">
-              {user.first_name || user.username}
-            </span>
+        <div className="ml-auto flex shrink-0 items-center gap-3">
+          <div className="hidden md:flex items-center gap-2 rounded-xl bg-muted/60 px-3 py-2 w-64">
+            <Search className="size-4 text-muted-foreground shrink-0" />
+            <input
+              type="text"
+              placeholder="Type here to search"
+              className="bg-transparent text-sm outline-none w-full placeholder:text-muted-foreground"
+            />
           </div>
-          <span className="hidden rounded-full border px-2 py-0.5 text-[10px] font-medium text-muted-foreground md:block">
-            {ROLE_LABELS[user.role]}
-          </span>
-          <ThemeToggle />
+
           <Button
-            variant="outline"
-            size="sm"
-            onClick={handleLogout}
-            className="hidden sm:inline-flex"
-            data-icon="inline-start"
+            variant="ghost"
+            size="icon"
+            className="relative rounded-xl text-muted-foreground hover:text-foreground"
           >
-            <LogOut data-icon="inline-start" />
-            Sign out
+            <Bell className="size-5" />
+            <span className="absolute top-1.5 right-1.5 size-2 rounded-full bg-primary" />
+          </Button>
+
+          <ThemeToggle />
+
+          <Button
+            variant="ghost"
+            size="icon"
+            className="rounded-xl text-muted-foreground hover:text-foreground lg:hidden"
+            onClick={handleLogout}
+            aria-label="Sign out"
+          >
+            <LogOut className="size-5" />
           </Button>
         </div>
       </div>

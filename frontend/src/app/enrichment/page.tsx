@@ -109,7 +109,7 @@ export default function EnrichmentPage() {
   return (
     <Suspense
       fallback={
-        <main className="flex min-h-dvh flex-col items-center justify-center bg-muted/30">
+      <main className="flex min-h-dvh flex-col items-center justify-center bg-background">
           <Loader label="Loading enrichment workspace..." />
         </main>
       }
@@ -293,9 +293,9 @@ function EnrichmentContent() {
 
   if (loading && me === null) {
     return (
-      <main className="flex min-h-dvh flex-col items-center justify-center bg-muted/30">
-        <Loader label="Loading enrichment workspace..." />
-      </main>
+      <main className="flex min-h-dvh flex-col items-center justify-center bg-background">
+          <Loader label="Loading enrichment workspace..." />
+        </main>
     )
   }
 
@@ -303,9 +303,9 @@ function EnrichmentContent() {
 
   return (
     <AppShell user={me}>
-      <div className="mx-auto w-full max-w-6xl space-y-6 p-4 sm:p-6">
+      <div className="p-4 sm:p-6 space-y-6">
         <div>
-          <h1 className="text-2xl font-semibold tracking-tight">Contact Enrichment</h1>
+          <h1 className="text-2xl font-bold tracking-tight text-foreground">Contact Enrichment</h1>
           <p className="text-sm text-muted-foreground">
             Find recruiters and TA contacts via the provider waterfall
             (PDL &rarr; ContactOut &rarr; Apollo)

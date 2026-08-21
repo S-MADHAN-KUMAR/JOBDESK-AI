@@ -51,6 +51,7 @@ import {
 } from "@/components/ui/dialog"
 import { AppShell } from "@/components/app-shell"
 import { Loader } from "@/components/loader"
+import { cn } from "@/lib/utils"
 import {
   type RawJob,
   type User,
@@ -91,6 +92,7 @@ export default function JobExplorerPage() {
   const [detail, setDetail] = useState<RawJob | null>(null)
 
   const [selected, setSelected] = useState<Set<string>>(new Set())
+  const [selectionMode, setSelectionMode] = useState(false)
   const [deleteOpen, setDeleteOpen] = useState(false)
   const [deleting, setDeleting] = useState(false)
   const [enrichOpen, setEnrichOpen] = useState(false)
@@ -270,7 +272,7 @@ export default function JobExplorerPage() {
 
   if (loading && me === null) {
     return (
-      <main className="flex min-h-dvh flex-col items-center justify-center bg-muted/30">
+      <main className="flex min-h-dvh flex-col items-center justify-center bg-background">
         <Loader label="Loading job records..." />
       </main>
     )
@@ -282,9 +284,9 @@ export default function JobExplorerPage() {
 
   return (
     <AppShell user={me}>
-      <div className="mx-auto w-full max-w-6xl space-y-6 p-4 sm:p-6">
+      <div className="p-4 sm:p-6 space-y-6">
         <div>
-          <h1 className="text-2xl font-semibold tracking-tight">Job Explorer</h1>
+          <h1 className="text-2xl font-bold tracking-tight text-foreground">Job Explorer</h1>
           <p className="text-sm text-muted-foreground">
             Browse individual job records with raw-to-normalized source
             traceability
@@ -351,33 +353,53 @@ export default function JobExplorerPage() {
           </CardContent>
         </Card>
 
-        <div className="grid items-start gap-6 lg:grid-cols-3">
-          <Card className="lg:col-span-2">
+        <div className={cn("grid items-start gap-6", detail ? "lg:grid-cols-3" : "")}>
+          <Card className={cn(detail && "lg:col-span-2")}>
             <CardHeader className="flex-row items-center justify-between gap-3 space-y-0">
               <CardTitle>Job records</CardTitle>
               <div className="flex flex-wrap items-center justify-end gap-2">
-                {selected.size > 0 && (
-                  <>
-                    <Button
-                      variant="secondary"
-                      size="sm"
-                      onClick={() => void handleEnrich()}
-                      disabled={enriching || enrichTargets.length === 0}
-                      data-icon="inline-start"
-                    >
-                      <Sparkles data-icon="inline-start" />
-                      Enrich selected ({enrichTargets.length})
-                    </Button>
-                    <Button
-                      variant="destructive"
-                      size="sm"
-                      onClick={() => setDeleteOpen(true)}
-                      data-icon="inline-start"
-                    >
-                      <Trash2 data-icon="inline-start" />
-                      Delete selected ({selected.size})
-                    </Button>
-                  </>
+                {selectionMode && selected.size > 0 && (
+                  <Button
+                    variant="secondary"
+                    size="sm"
+                    onClick={() => void handleEnrich()}
+                    disabled={enriching || enrichTargets.length === 0}
+                    data-icon="inline-start"
+                  >
+                    <Sparkles data-icon="inline-start" />
+                    Enrich ({enrichTargets.length})
+                  </Button>
+                )}
+                {selectionMode && selected.size > 0 && (
+                  <Button
+                    variant="destructive"
+                    size="sm"
+                    onClick={() => setDeleteOpen(true)}
+                    data-icon="inline-start"
+                  >
+                    <Trash2 data-icon="inline-start" />
+                    Delete ({selected.size})
+                  </Button>
+                )}
+                {selectionMode && (
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => { setSelectionMode(false); setSelected(new Set()) }}
+                  >
+                    Cancel
+                  </Button>
+                )}
+                {!selectionMode && (
+                  <Button
+                    variant="destructive"
+                    size="sm"
+                    onClick={() => setSelectionMode(true)}
+                    data-icon="inline-start"
+                  >
+                    <Trash2 data-icon="inline-start" />
+                    Delete
+                  </Button>
                 )}
                 <span className="text-sm text-muted-foreground">
                   {total} found
@@ -401,15 +423,17 @@ export default function JobExplorerPage() {
                 <Table>
                   <TableHeader>
                     <TableRow>
-                      <TableHead className="w-10">
-                        <input
-                          type="checkbox"
-                          aria-label="Select all jobs"
-                          checked={allSelected}
-                          onChange={toggleAll}
-                          className="size-4 accent-primary"
-                        />
-                      </TableHead>
+                      {selectionMode && (
+                        <TableHead className="w-10">
+                          <input
+                            type="checkbox"
+                            aria-label="Select all jobs"
+                            checked={allSelected}
+                            onChange={toggleAll}
+                            className="size-4 accent-primary"
+                          />
+                        </TableHead>
+                      )}
                       <TableHead>Title</TableHead>
                       <TableHead>Company</TableHead>
                       <TableHead>Location</TableHead>
@@ -421,20 +445,20 @@ export default function JobExplorerPage() {
                     {jobs.map((job) => (
                       <TableRow
                         key={job.id}
-                        className={`cursor-pointer ${
-                          detail?.id === job.id ? "bg-muted" : ""
-                        }`}
+                        className={cn("cursor-pointer", detail?.id === job.id && "bg-muted")}
                         onClick={() => setDetail(job)}
                       >
-                        <TableCell onClick={(e) => e.stopPropagation()}>
-                          <input
-                            type="checkbox"
-                            aria-label={`Select ${job.title || "job"}`}
-                            checked={selected.has(job.id)}
-                            onChange={() => toggleJob(job.id)}
-                            className="size-4 accent-primary"
-                          />
-                        </TableCell>
+                        {selectionMode && (
+                          <TableCell onClick={(e) => e.stopPropagation()}>
+                            <input
+                              type="checkbox"
+                              aria-label={`Select ${job.title || "job"}`}
+                              checked={selected.has(job.id)}
+                              onChange={() => toggleJob(job.id)}
+                              className="size-4 accent-primary"
+                            />
+                          </TableCell>
+                        )}
                         <TableCell className="max-w-64">
                           <span className="block truncate font-medium">
                             {job.title || "—"}
@@ -498,12 +522,20 @@ export default function JobExplorerPage() {
             )}
           </Card>
 
-          <Card>
-            <CardHeader>
-              <CardTitle>Job details</CardTitle>
-            </CardHeader>
-            <CardContent>
-              {detail ? (
+          {detail && (
+            <Card>
+              <CardHeader className="flex-row items-center justify-between space-y-0">
+                <CardTitle>Job details</CardTitle>
+                <Button
+                  variant="ghost"
+                  size="icon-sm"
+                  onClick={() => setDetail(null)}
+                  aria-label="Close details"
+                >
+                  &times;
+                </Button>
+              </CardHeader>
+              <CardContent>
                 <div className="flex flex-col gap-3">
                   <div>
                     <h3 className="font-semibold leading-snug">
@@ -556,7 +588,7 @@ export default function JobExplorerPage() {
                     )}
                   </div>
                   {detail.description && (
-                    <div className="max-h-48 overflow-y-auto rounded-lg border bg-muted/40 px-3 py-2 text-sm">
+                    <div className="max-h-48 overflow-y-auto rounded-xl border bg-muted/40 px-3 py-2 text-sm">
                       {detail.description}
                     </div>
                   )}
@@ -564,21 +596,14 @@ export default function JobExplorerPage() {
                     <p className="mb-1 text-xs font-medium uppercase tracking-wide text-muted-foreground">
                       Raw provider payload
                     </p>
-                    <pre className="max-h-80 overflow-auto rounded-lg border bg-muted/40 p-3 font-mono text-xs">
+                    <pre className="max-h-80 overflow-auto rounded-xl border bg-muted/40 p-3 font-mono text-xs leading-relaxed">
                       {JSON.stringify(detail.raw_payload, null, 2)}
                     </pre>
                   </div>
                 </div>
-              ) : (
-                <div className="flex flex-col items-center gap-2 px-4 py-16 text-center">
-                  <BriefcaseBusiness className="size-8 text-muted-foreground" />
-                  <p className="text-sm text-muted-foreground">
-                    Select a job to view its details here.
-                  </p>
-                </div>
-              )}
-            </CardContent>
-          </Card>
+              </CardContent>
+            </Card>
+          )}
         </div>
       </div>
 

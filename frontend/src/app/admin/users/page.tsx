@@ -281,7 +281,7 @@ export default function AdminUsersPage() {
 
   if (loading) {
     return (
-      <main className="flex min-h-dvh flex-col items-center justify-center bg-muted/30">
+      <main className="flex min-h-dvh flex-col items-center justify-center bg-background">
         <Loader label="Loading users..." />
       </main>
     )
@@ -291,10 +291,10 @@ export default function AdminUsersPage() {
 
   return (
     <AppShell user={me}>
-      <div className="mx-auto w-full max-w-6xl flex-1 space-y-6 p-4 sm:p-6">
+      <div className="p-4 sm:p-6 space-y-6">
         <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
           <div>
-            <h1 className="text-2xl font-semibold tracking-tight">
+            <h1 className="text-2xl font-bold tracking-tight text-foreground">
               User Management
             </h1>
             <p className="text-sm text-muted-foreground">
