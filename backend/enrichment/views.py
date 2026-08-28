@@ -3,7 +3,7 @@ import logging
 
 from django.db.models import F, Q
 from rest_framework import status, viewsets
-from rest_framework.decorators import action
+from rest_framework.decorators import action, api_view, permission_classes
 from rest_framework.pagination import PageNumberPagination
 from rest_framework.response import Response
 from rest_framework.views import APIView
@@ -17,10 +17,17 @@ from .models import Company, Contact, EnrichmentRun, EnrichmentSource
 from .serializers import (
     CompanySerializer,
     ContactSerializer,
+    EnrichmentRunSerializer,
     EnrichmentSourceSerializer,
 )
 
 logger = logging.getLogger(__name__)
+
+
+class StandardResultsPagination(PageNumberPagination):
+    page_size = 25
+    page_size_query_param = 'page_size'
+    max_page_size = 100
 
 
 class EnrichmentSourceViewSet(viewsets.ModelViewSet):
@@ -30,6 +37,7 @@ class EnrichmentSourceViewSet(viewsets.ModelViewSet):
     queryset = EnrichmentSource.objects.all().order_by('name')
     serializer_class = EnrichmentSourceSerializer
     permission_classes = [IsAdmin]
+    pagination_class = StandardResultsPagination
 
     @action(detail=True, methods=['post'], url_path='test-connection')
     def test_connection(self, request, pk=None):
@@ -78,12 +86,12 @@ class EnrichmentSourceViewSet(viewsets.ModelViewSet):
         }, status=status.HTTP_200_OK)
 
 
-class CompanyViewSet(viewsets.ReadOnlyModelViewSet):
+class CompanyViewSet(viewsets.ModelViewSet):
     """Market Analyst: browse companies targeted for enrichment."""
 
-    queryset = Company.objects.all()
     serializer_class = CompanySerializer
-    permission_classes = [IsMarketAnalyst]
+    permission_classes = [IsAdmin]
+    pagination_class = StandardResultsPagination
 
     def get_queryset(self):
         queryset = Company.objects.all()
@@ -92,13 +100,57 @@ class CompanyViewSet(viewsets.ReadOnlyModelViewSet):
             queryset = queryset.filter(Q(name__icontains=search) | Q(domain__icontains=search))
         return queryset
 
+    @action(detail=False, methods=['post'], url_path='bulk-delete')
+    def bulk_delete(self, request):
+        """Bulk-delete companies and all related contacts/enrichment runs."""
+        ids = request.data.get('ids') or []
+        if not ids:
+            return Response({
+                'success': False,
+                'deleted': 0,
+                'message': 'No company IDs provided.',
+            }, status=status.HTTP_400_BAD_REQUEST)
+        companies = Company.objects.filter(id__in=ids)
+        contact_count = Contact.objects.filter(company__in=companies).count()
+        run_count = EnrichmentRun.objects.filter(company__in=companies).count()
+        deleted, _ = companies.delete()
+        return Response({
+            'success': True,
+            'deleted': deleted,
+            'message': f'Deleted {deleted} company(ies), {contact_count} contact(s), {run_count} enrichment run(s).',
+        })
+
+
+class EnrichmentRunViewSet(viewsets.ReadOnlyModelViewSet):
+    """List and retrieve enrichment runs with company details."""
+
+    serializer_class = EnrichmentRunSerializer
+    permission_classes = [IsAdmin]
+    pagination_class = StandardResultsPagination
+
+    def get_queryset(self):
+        qs = EnrichmentRun.objects.select_related('company').order_by('-started_at')
+        company = self.request.query_params.get('company', '').strip()
+        run_status = self.request.query_params.get('status', '').strip()
+        search = self.request.query_params.get('search', '').strip()
+        if company:
+            qs = qs.filter(company_id=company)
+        if run_status:
+            qs = qs.filter(status=run_status)
+        if search:
+            qs = qs.filter(
+                Q(company__name__icontains=search) |
+                Q(status__icontains=search)
+            )
+        return qs
+
 
 class ContactViewSet(viewsets.ReadOnlyModelViewSet):
     """FR-022: Market Analyst browse of enriched contacts with provenance."""
 
     serializer_class = ContactSerializer
     permission_classes = [IsMarketAnalyst]
-    pagination_class = PageNumberPagination
+    pagination_class = StandardResultsPagination
 
     def get_queryset(self):
         queryset = Contact.objects.select_related('company').order_by('-created_at')
@@ -111,6 +163,14 @@ class ContactViewSet(viewsets.ReadOnlyModelViewSet):
         verification = self.request.query_params.get('verification', '').strip()
         if verification:
             queryset = queryset.filter(verification_state=verification)
+        search = self.request.query_params.get('search', '').strip()
+        if search:
+            queryset = queryset.filter(
+                Q(full_name__icontains=search) |
+                Q(email__icontains=search) |
+                Q(job_title__icontains=search) |
+                Q(company__name__icontains=search)
+            )
         return queryset
 
     @action(detail=False, methods=['post'], url_path='bulk-delete')
@@ -450,3 +510,49 @@ class ApolloPhoneWebhookView(APIView):
                     run.save(update_fields=['pending_phone_requests'])
         logger.info("Apollo phone webhook received: %s contact(s) updated", updated)
         return Response({'success': True, 'updated': updated}, status=status.HTTP_200_OK)
+
+
+# ---------------------------------------------------------------------------
+# Bulk delete endpoints
+# ---------------------------------------------------------------------------
+
+@api_view(['POST'])
+@permission_classes([IsAdmin])
+def bulk_delete_enrichment_runs(request):
+    """Delete enrichment runs and their related data."""
+    ids = request.data.get('ids') or []
+    if not ids:
+        return Response({
+            'success': False,
+            'deleted': 0,
+            'message': 'No run IDs provided.',
+        }, status=status.HTTP_400_BAD_REQUEST)
+    runs = EnrichmentRun.objects.filter(id__in=ids)
+    count = runs.count()
+    runs.delete()
+    return Response({
+        'success': True,
+        'deleted': count,
+        'message': f'Deleted {count} enrichment run(s).',
+    })
+
+
+@api_view(['POST'])
+@permission_classes([IsAdmin])
+def bulk_delete_enrichment_sources(request):
+    """Delete enrichment sources."""
+    ids = request.data.get('ids') or []
+    if not ids:
+        return Response({
+            'success': False,
+            'deleted': 0,
+            'message': 'No source IDs provided.',
+        }, status=status.HTTP_400_BAD_REQUEST)
+    sources = EnrichmentSource.objects.filter(id__in=ids)
+    count = sources.count()
+    sources.delete()
+    return Response({
+        'success': True,
+        'deleted': count,
+        'message': f'Deleted {count} enrichment source(s).',
+    })

@@ -1,6 +1,6 @@
 from rest_framework import serializers
 
-from .models import Company, Contact, EnrichmentSource
+from .models import Company, Contact, EnrichmentRun, EnrichmentSource
 
 
 class EnrichmentSourceSerializer(serializers.ModelSerializer):
@@ -59,4 +59,16 @@ class ContactSerializer(serializers.ModelSerializer):
             'email', 'phone', 'linkedin_url', 'provider_source',
             'verification_state', 'confidence_score', 'last_verified_at',
             'raw_payload', 'created_at',
+        ]
+
+
+class EnrichmentRunSerializer(serializers.ModelSerializer):
+    company_name = serializers.CharField(source='company.name', read_only=True)
+
+    class Meta:
+        model = EnrichmentRun
+        fields = [
+            'id', 'company', 'company_name', 'status', 'providers_used',
+            'contacts_found', 'stored_count', 'error_count',
+            'started_at', 'ended_at',
         ]

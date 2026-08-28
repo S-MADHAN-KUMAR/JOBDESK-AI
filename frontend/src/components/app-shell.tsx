@@ -3,14 +3,17 @@
 import { useState, type ReactNode } from "react"
 import { Navbar } from "@/components/navbar"
 import { Sidebar } from "@/components/sidebar"
+import { ContentSkeleton } from "@/components/content-skeleton"
 import type { User } from "@/lib/api"
 
 export function AppShell({
   user,
   children,
+  loading = false,
 }: {
   user: User
   children: ReactNode
+  loading?: boolean
 }) {
   const [drawerOpen, setDrawerOpen] = useState(false)
 
@@ -23,7 +26,9 @@ export function AppShell({
       />
       <div className="flex min-h-dvh flex-col lg:pl-64">
         <Navbar user={user} onMenuClick={() => setDrawerOpen(true)} />
-        <main className="flex-1">{children}</main>
+        <main className="flex-1">
+          {loading ? <ContentSkeleton /> : children}
+        </main>
       </div>
     </div>
   )

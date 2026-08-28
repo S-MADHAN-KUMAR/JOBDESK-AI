@@ -25,6 +25,15 @@ from .serializers import (
 User = get_user_model()
 
 
+def _truncate(value: str, max_length: int = 255) -> str:
+    """Truncate a string to max_length, appending '...' if trimmed."""
+    if not isinstance(value, str):
+        value = str(value) if value else ''
+    if len(value) > max_length:
+        return value[:max_length - 3] + '...'
+    return value
+
+
 from django.core.cache import cache
 from rest_framework.decorators import api_view
 from rest_framework.permissions import AllowAny
@@ -56,6 +65,35 @@ class ProfileView(APIView):
 
     def get(self, request):
         return Response(UserProfileSerializer(request.user).data)
+
+    def put(self, request):
+        serializer = UserProfileSerializer(request.user, data=request.data, partial=True)
+        serializer.is_valid(raise_exception=True)
+        serializer.save()
+        return Response(serializer.data)
+
+    def patch(self, request):
+        return self.put(request)
+
+
+class PasswordChangeView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        from core.serializers import PasswordChangeSerializer
+        serializer = PasswordChangeSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+
+        user = request.user
+        if not user.check_password(serializer.validated_data['current_password']):
+            return Response(
+                {'current_password': ['Current password is incorrect.']},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        user.set_password(serializer.validated_data['new_password'])
+        user.save(update_fields=['password'])
+        return Response({'status': 'password updated'})
 
 
 class JobExplorerViewSet(viewsets.ReadOnlyModelViewSet):
@@ -193,6 +231,18 @@ class JobSourceViewSet(viewsets.ModelViewSet):
             max_pages = max(1, int(request.data.get('max_pages') or source.default_params.get('max_pages') or 1))
         except (TypeError, ValueError):
             max_pages = 1
+        try:
+            min_salary = int(request.data.get('min_salary') or source.default_params.get('min_salary') or 0)
+        except (TypeError, ValueError):
+            min_salary = 0
+        try:
+            max_salary = int(request.data.get('max_salary') or source.default_params.get('max_salary') or 0)
+        except (TypeError, ValueError):
+            max_salary = 0
+        employment_type = str(request.data.get('employment_type', '')).strip() or source.default_params.get('employment_type', '')
+        work_mode = str(request.data.get('work_mode', '')).strip() or source.default_params.get('work_mode', '')
+        role = str(request.data.get('role', '')).strip() or source.default_params.get('role', '')
+        posted_within = str(request.data.get('posted_within', '')).strip() or source.default_params.get('posted_within', '')
 
         run = IngestionRun.objects.create(
             provider=source,
@@ -204,7 +254,18 @@ class JobSourceViewSet(viewsets.ModelViewSet):
         fetched = 0
         try:
             provider = get_provider(source)
-            filters = {'keyword': keyword, 'location': location, 'country': country, 'max_pages': max_pages}
+            filters = {
+                'keyword': keyword,
+                'location': location,
+                'country': country,
+                'max_pages': max_pages,
+                'min_salary': min_salary,
+                'max_salary': max_salary,
+                'employment_type': employment_type,
+                'work_mode': work_mode,
+                'role': role,
+                'posted_within': posted_within,
+            }
             raw_records = provider.search_jobs(filters)
 
             for record in raw_records:
@@ -213,11 +274,11 @@ class JobSourceViewSet(viewsets.ModelViewSet):
                     RawJob.objects.create(
                         ingestion_run=run,
                         provider_code=source.provider_code,
-                        external_id=normalized['external_id'],
+                        external_id=_truncate(normalized['external_id']),
                         url=normalized.get('url', ''),
-                        title=normalized.get('title', ''),
-                        company=normalized.get('company', ''),
-                        location=normalized.get('location', ''),
+                        title=_truncate(normalized.get('title', '')),
+                        company=_truncate(normalized.get('company', '')),
+                        location=_truncate(normalized.get('location', '')),
                         description=normalized.get('description', ''),
                         raw_payload=record,
                     )

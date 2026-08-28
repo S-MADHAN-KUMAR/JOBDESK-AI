@@ -6,8 +6,6 @@ import { Switch } from "@base-ui/react/switch"
 import {
   Activity,
   Cable,
-  CircleCheck,
-  CircleX,
   Clock,
   Gauge,
   KeyRound,
@@ -17,7 +15,6 @@ import {
   ShieldAlert,
   Trash2,
   WifiOff,
-  Wrench,
 } from "lucide-react"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
@@ -38,20 +35,15 @@ import {
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { AppShell } from "@/components/app-shell"
-import { Loader } from "@/components/loader"
+import { cn } from "@/lib/utils"
+import { useProfile, useJobSources } from "@/lib/hooks"
 import {
   type HealthStatus,
-  type IngestionRunResult,
   type JobSource,
   type JobSourceInput,
-  type User,
   createJobSource,
-  fetchJobSources,
-  fetchProfile,
-  runJobSourceIngestion,
   updateJobSource,
 } from "@/lib/api"
-import { cn } from "@/lib/utils"
 
 const HEALTH_META: Record<
   HealthStatus,
@@ -138,11 +130,9 @@ function formToInput(form: FormState): JobSourceInput {
 
 export default function AdminSourcesPage() {
   const router = useRouter()
-  const [me, setMe] = useState<User | null>(null)
-  const [sources, setSources] = useState<JobSource[]>([])
-  const [loading, setLoading] = useState(true)
+  const { data: me, isLoading: profileLoading, error: profileError } = useProfile()
+  const { data: sources = [], isLoading: sourcesLoading, refetch: refetchSources } = useJobSources()
   const [error, setError] = useState<string | null>(null)
-  const [reloadKey, setReloadKey] = useState(0)
 
   const [formOpen, setFormOpen] = useState(false)
   const [editing, setEditing] = useState<JobSource | null>(null)
@@ -153,56 +143,12 @@ export default function AdminSourcesPage() {
   const [apiKey, setApiKey] = useState("")
   const [savingCreds, setSavingCreds] = useState(false)
 
-  const [testTarget, setTestTarget] = useState<JobSource | null>(null)
-  const [testForm, setTestForm] = useState({
-    keyword: "",
-    location: "",
-    country: "India",
-    max_pages: "5",
-  })
-  const [testing, setTesting] = useState(false)
-  const [testResults, setTestResults] = useState<
-    Record<string, IngestionRunResult>
-  >({})
-
   const [deleteTarget, setDeleteTarget] = useState<JobSource | null>(null)
   const [deleting, setDeleting] = useState(false)
 
-  function refresh() {
-    setReloadKey((key) => key + 1)
-  }
-
   useEffect(() => {
-    let cancelled = false
-
-    async function run() {
-      try {
-        const profile = await fetchProfile()
-        if (cancelled) return
-        setMe(profile)
-        if (profile.role !== "ADMIN") {
-          setError("Access denied: Admin role required.")
-          return
-        }
-        const list = await fetchJobSources()
-        if (!cancelled) setSources(list)
-      } catch (err) {
-        if (cancelled) return
-        if (err instanceof Error && err.message === "Session expired") {
-          router.push("/login")
-        } else {
-          setError(err instanceof Error ? err.message : "Failed to load sources")
-        }
-      } finally {
-        if (!cancelled) setLoading(false)
-      }
-    }
-
-    void run()
-    return () => {
-      cancelled = true
-    }
-  }, [router, reloadKey])
+    if (profileError) router.push("/login")
+  }, [profileError, router])
 
   function openCreate() {
     setEditing(null)
@@ -227,7 +173,7 @@ export default function AdminSourcesPage() {
         await createJobSource(formToInput(form))
       }
       setFormOpen(false)
-      refresh()
+      refetchSources()
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to save provider")
     } finally {
@@ -239,7 +185,7 @@ export default function AdminSourcesPage() {
     setError(null)
     try {
       await updateJobSource(source.id, { is_active: !source.is_active })
-      refresh()
+      refetchSources()
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to toggle provider")
     }
@@ -256,42 +202,11 @@ export default function AdminSourcesPage() {
       })
       setCredTarget(null)
       setApiKey("")
-      refresh()
+      refetchSources()
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to save credentials")
     } finally {
       setSavingCreds(false)
-    }
-  }
-
-  function openTest(source: JobSource) {
-    setTestForm({
-      keyword: String(source.default_params.keyword ?? ""),
-      location: String(source.default_params.location ?? ""),
-      country: String(source.default_params.country ?? "India"),
-      max_pages: String(source.default_params.max_pages ?? "5"),
-    })
-    setTestTarget(source)
-  }
-
-  async function submitTest(e: React.FormEvent) {
-    e.preventDefault()
-    if (!testTarget) return
-    setTesting(true)
-    setError(null)
-    try {
-      const result = await runJobSourceIngestion(testTarget.id, {
-        keyword: testForm.keyword.trim() || undefined,
-        location: testForm.location.trim() || undefined,
-        country: testForm.country.trim() || undefined,
-        max_pages: Math.max(1, Number(testForm.max_pages) || 1),
-      })
-      setTestResults((prev) => ({ ...prev, [testTarget.id]: result }))
-      refresh()
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Test ingestion failed")
-    } finally {
-      setTesting(false)
     }
   }
 
@@ -302,7 +217,7 @@ export default function AdminSourcesPage() {
     try {
       await updateJobSource(deleteTarget.id, { is_active: false })
       setDeleteTarget(null)
-      refresh()
+      refetchSources()
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to disable provider")
     } finally {
@@ -310,18 +225,10 @@ export default function AdminSourcesPage() {
     }
   }
 
-  if (loading) {
-    return (
-      <main className="flex min-h-dvh flex-col items-center justify-center bg-background">
-        <Loader label="Loading providers..." />
-      </main>
-    )
-  }
-
   if (!me) return null
 
   return (
-    <AppShell user={me}>
+    <AppShell user={me} loading={profileLoading}>
       <div className="p-4 sm:p-6 space-y-6">
         <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
           <div>
@@ -366,7 +273,6 @@ export default function AdminSourcesPage() {
           <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
             {sources.map((source) => {
               const health = HEALTH_META[source.health_status]
-              const test = testResults[source.id]
               const usagePct = Math.min(
                 100,
                 Math.round((source.current_daily_uses / source.rate_limit_daily) * 100),
@@ -486,32 +392,6 @@ export default function AdminSourcesPage() {
                       </p>
                     </div>
 
-                    {test && (
-                      <div
-                        className={cn(
-                          "flex items-start gap-2 rounded-lg border px-3 py-2 text-sm",
-                          test.success
-                            ? "border-emerald-500/30 bg-emerald-500/5 text-emerald-700 dark:text-emerald-400"
-                            : "border-red-500/30 bg-red-500/5 text-red-700 dark:text-red-400",
-                        )}
-                      >
-                        {test.success ? (
-                          <CircleCheck className="mt-0.5 size-4 shrink-0" />
-                        ) : (
-                          <CircleX className="mt-0.5 size-4 shrink-0" />
-                        )}
-                        <div className="min-w-0">
-                          <span>{test.message}</span>
-                          {typeof test.fetched_count === "number" && (
-                            <p className="mt-0.5 text-xs opacity-80">
-                              {test.fetched_count} stored · {test.error_count}{" "}
-                              errors
-                            </p>
-                          )}
-                        </div>
-                      </div>
-                    )}
-
                     <div className="mt-auto flex flex-wrap items-center gap-2 pt-1">
                       <Button
                         variant="outline"
@@ -530,15 +410,6 @@ export default function AdminSourcesPage() {
                       >
                         <KeyRound data-icon="inline-start" />
                         Credentials
-                      </Button>
-                      <Button
-                        variant="secondary"
-                        size="sm"
-                        onClick={() => openTest(source)}
-                        data-icon="inline-start"
-                      >
-                        <Wrench data-icon="inline-start" />
-                        Test connection
                       </Button>
                       <Button
                         variant="ghost"
@@ -756,112 +627,6 @@ export default function AdminSourcesPage() {
               <Button type="submit" disabled={savingCreds} data-icon="inline-start">
                 {savingCreds && <Loader2 className="animate-spin" data-icon="inline-start" />}
                 {savingCreds ? "Saving..." : "Save credentials"}
-              </Button>
-            </DialogFooter>
-          </form>
-        </DialogContent>
-      </Dialog>
-
-      <Dialog
-        open={testTarget !== null}
-        onOpenChange={(open) => {
-          if (!open) setTestTarget(null)
-        }}
-      >
-        <DialogContent>
-          <form onSubmit={submitTest}>
-            <DialogHeader>
-              <DialogTitle>Test ingestion</DialogTitle>
-              <DialogDescription>
-                {testTarget
-                  ? `Fetch jobs from ${testTarget.name} with the filters below.`
-                  : ""}{" "}
-                Results are stored in the raw jobs table.
-              </DialogDescription>
-            </DialogHeader>
-            <div className="flex flex-col gap-3 py-4">
-              <div className="flex flex-col gap-2">
-                <Label htmlFor="test-keyword">Keyword</Label>
-                <Input
-                  id="test-keyword"
-                  value={testForm.keyword}
-                  onChange={(e) =>
-                    setTestForm({ ...testForm, keyword: e.target.value })
-                  }
-                  placeholder="e.g. Java Backend Developer"
-                  required
-                />
-              </div>
-              <div className="grid grid-cols-2 gap-3">
-                <div className="flex flex-col gap-2">
-                  <Label htmlFor="test-location">Location</Label>
-                  <Input
-                    id="test-location"
-                    value={testForm.location}
-                    onChange={(e) =>
-                      setTestForm({ ...testForm, location: e.target.value })
-                    }
-                    placeholder="e.g. Chennai"
-                  />
-                </div>
-                <div className="flex flex-col gap-2">
-                  <Label htmlFor="test-country">Country</Label>
-                  <Input
-                    id="test-country"
-                    value={testForm.country}
-                    onChange={(e) =>
-                      setTestForm({ ...testForm, country: e.target.value })
-                    }
-                    placeholder="e.g. India"
-                  />
-                </div>
-                <div className="flex flex-col gap-2">
-                  <Label htmlFor="test-pages">Max results</Label>
-                  <Input
-                    id="test-pages"
-                    type="number"
-                    min={1}
-                    value={testForm.max_pages}
-                    onChange={(e) =>
-                      setTestForm({ ...testForm, max_pages: e.target.value })
-                    }
-                  />
-                </div>
-              </div>
-              {testTarget && testResults[testTarget.id] && (
-                <div
-                  className={cn(
-                    "flex items-start gap-2 rounded-lg border px-3 py-2 text-sm",
-                    testResults[testTarget.id].success
-                      ? "border-emerald-500/30 bg-emerald-500/5 text-emerald-700 dark:text-emerald-400"
-                      : "border-red-500/30 bg-red-500/5 text-red-700 dark:text-red-400",
-                  )}
-                >
-                  {testResults[testTarget.id].success ? (
-                    <CircleCheck className="mt-0.5 size-4 shrink-0" />
-                  ) : (
-                    <CircleX className="mt-0.5 size-4 shrink-0" />
-                  )}
-                  <div className="min-w-0">
-                    <p>{testResults[testTarget.id].message}</p>
-                    {typeof testResults[testTarget.id].fetched_count ===
-                      "number" && (
-                      <p className="mt-0.5 text-xs opacity-80">
-                        {testResults[testTarget.id].fetched_count} stored ·{" "}
-                        {testResults[testTarget.id].error_count} errors
-                      </p>
-                    )}
-                  </div>
-                </div>
-              )}
-            </div>
-            <DialogFooter>
-              <Button type="button" variant="outline" onClick={() => setTestTarget(null)}>
-                Close
-              </Button>
-              <Button type="submit" disabled={testing} data-icon="inline-start">
-                {testing && <Loader2 className="animate-spin" data-icon="inline-start" />}
-                {testing ? "Running..." : "Run test"}
               </Button>
             </DialogFooter>
           </form>

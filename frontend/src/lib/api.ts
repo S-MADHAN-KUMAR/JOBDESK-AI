@@ -73,6 +73,27 @@ export async function fetchProfile(): Promise<User> {
   return apiFetch<User>("/auth/profile/")
 }
 
+export async function updateProfile(data: {
+  first_name?: string
+  last_name?: string
+  email?: string
+}): Promise<User> {
+  return apiFetch<User>("/auth/profile/", {
+    method: "PATCH",
+    body: JSON.stringify(data),
+  })
+}
+
+export async function changePassword(data: {
+  current_password: string
+  new_password: string
+}): Promise<{ status: string }> {
+  return apiFetch<{ status: string }>("/auth/password/", {
+    method: "POST",
+    body: JSON.stringify(data),
+  })
+}
+
 let refreshing: Promise<string> | null = null
 
 async function refreshAccess(): Promise<string> {
@@ -123,12 +144,22 @@ export async function apiFetch<T>(
   }
 
   if (!res.ok) {
-    const detail = (await res.json().catch(() => ({}))).detail
+    const text = await res.text().catch(() => "")
+    let detail: string | undefined
+    if (text) {
+      try {
+        detail = JSON.parse(text).detail
+      } catch {
+        detail = undefined
+      }
+    }
     throw new Error(
       typeof detail === "string" ? detail : `Request failed (${res.status})`,
     )
   }
-  return res.json() as Promise<T>
+  const text = await res.text().catch(() => "")
+  if (!text) return undefined as T
+  return JSON.parse(text) as T
 }
 
 export async function logout(): Promise<void> {
@@ -322,8 +353,22 @@ export function pollApolloPhones(): Promise<PhonePollResult> {
   })
 }
 
-export function fetchEnrichmentSources(): Promise<EnrichmentSource[]> {
-  return apiFetch<EnrichmentSource[]>("/enrichment/sources/")
+export type EnrichmentSourcePage = {
+  count: number
+  next: string | null
+  previous: string | null
+  results: EnrichmentSource[]
+}
+
+export function fetchEnrichmentSources(params: {
+  page?: number
+  page_size?: number
+} = {}): Promise<EnrichmentSourcePage> {
+  const search = new URLSearchParams()
+  if (params.page && params.page > 1) search.set("page", String(params.page))
+  if (params.page_size) search.set("page_size", String(params.page_size))
+  const qs = search.toString()
+  return apiFetch<EnrichmentSourcePage>(`/enrichment/sources/${qs ? `?${qs}` : ""}`)
 }
 
 export function createEnrichmentSource(
@@ -343,13 +388,6 @@ export function updateEnrichmentSource(
     method: "PATCH",
     body: JSON.stringify(data),
   })
-}
-
-export function testEnrichmentSource(id: string): Promise<TestConnectionResult> {
-  return apiFetch<TestConnectionResult>(
-    `/enrichment/sources/${id}/test-connection/`,
-    { method: "POST" },
-  )
 }
 
 export type EnrichmentRunInput = {
@@ -384,8 +422,24 @@ export function fetchEnrichmentContacts(
   return apiFetch<EnrichedContactPage>(`/enrichment/contacts/${qs ? `?${qs}` : ""}`)
 }
 
-export function fetchEnrichmentCompanies(): Promise<Company[]> {
-  return apiFetch<Company[]>("/enrichment/companies/")
+export type CompanyPage = {
+  count: number
+  next: string | null
+  previous: string | null
+  results: Company[]
+}
+
+export function fetchEnrichmentCompanies(params: {
+  q?: string
+  page?: number
+  page_size?: number
+} = {}): Promise<CompanyPage> {
+  const search = new URLSearchParams()
+  if (params.q) search.set("q", params.q)
+  if (params.page && params.page > 1) search.set("page", String(params.page))
+  if (params.page_size) search.set("page_size", String(params.page_size))
+  const qs = search.toString()
+  return apiFetch<CompanyPage>(`/enrichment/companies/${qs ? `?${qs}` : ""}`)
 }
 
 export function deleteEnrichedContacts(ids: string[]): Promise<BulkDeleteResult> {
@@ -393,6 +447,64 @@ export function deleteEnrichedContacts(ids: string[]): Promise<BulkDeleteResult>
     method: "POST",
     body: JSON.stringify({ ids }),
   })
+}
+
+export function bulkDeleteEnrichmentRuns(ids: string[]): Promise<BulkDeleteResult> {
+  return apiFetch<BulkDeleteResult>("/enrichment/bulk-delete-runs/", {
+    method: "POST",
+    body: JSON.stringify({ ids }),
+  })
+}
+
+export function bulkDeleteEnrichmentCompanies(ids: string[]): Promise<BulkDeleteResult> {
+  return apiFetch<BulkDeleteResult>("/enrichment/companies/bulk-delete/", {
+    method: "POST",
+    body: JSON.stringify({ ids }),
+  })
+}
+
+export function bulkDeleteEnrichmentSources(ids: string[]): Promise<BulkDeleteResult> {
+  return apiFetch<BulkDeleteResult>("/enrichment/bulk-delete-sources/", {
+    method: "POST",
+    body: JSON.stringify({ ids }),
+  })
+}
+
+export type EnrichmentRunPage = {
+  count: number
+  next: string | null
+  previous: string | null
+  results: EnrichmentRunData[]
+}
+
+export type EnrichmentRunData = {
+  id: string
+  company: string
+  company_name: string
+  status: string
+  providers_used: string[]
+  contacts_found: number
+  stored_count: number
+  error_count: number
+  started_at: string
+  ended_at: string | null
+}
+
+export function fetchEnrichmentRuns(params: {
+  company?: string
+  status?: string
+  search?: string
+  page?: number
+  page_size?: number
+} = {}): Promise<EnrichmentRunPage> {
+  const search = new URLSearchParams()
+  if (params.company) search.set("company", params.company)
+  if (params.status) search.set("status", params.status)
+  if (params.search) search.set("search", params.search)
+  if (params.page && params.page > 1) search.set("page", String(params.page))
+  if (params.page_size) search.set("page_size", String(params.page_size))
+  const qs = search.toString()
+  return apiFetch<EnrichmentRunPage>(`/enrichment/runs/${qs ? `?${qs}` : ""}`)
 }
 
 export type ContactPhoneResult = {
@@ -439,15 +551,6 @@ export type JobSourceInput = {
   rate_limit_daily?: number
 }
 
-export type TestConnectionResult = {
-  success: boolean
-  provider: string
-  status: HealthStatus
-  message: string
-  rate_limit_headroom?: number
-  checked_at: string
-}
-
 export type IngestionRunResult = {
   success: boolean
   provider: string
@@ -466,6 +569,12 @@ export type JobSourceRunInput = {
   location?: string
   country?: string
   max_pages?: number
+  min_salary?: number
+  max_salary?: number
+  employment_type?: string
+  work_mode?: string
+  role?: string
+  posted_within?: string
 }
 
 export function fetchJobSources(): Promise<JobSource[]> {
@@ -489,12 +598,6 @@ export function updateJobSource(
   })
 }
 
-export function testJobSource(id: string): Promise<TestConnectionResult> {
-  return apiFetch<TestConnectionResult>(`/admin/sources/${id}/test-connection/`, {
-    method: "POST",
-  })
-}
-
 export function runJobSourceIngestion(
   id: string,
   params: JobSourceRunInput,
@@ -506,3 +609,615 @@ export function runJobSourceIngestion(
 }
 
 export { getAccess }
+
+// ---------------------------------------------------------------------------
+// Ingestion Pipeline Admin
+// ---------------------------------------------------------------------------
+
+export type IngestionRun = {
+  id: string
+  provider: string
+  provider_code: string
+  status: "pending" | "running" | "completed" | "failed" | "partial"
+  started_at: string | null
+  ended_at: string | null
+  fetched_count: number
+  error_count: number
+  errors: { error: string }[]
+  created_at: string
+}
+
+export type IngestionRunsPage = {
+  count: number
+  next: string | null
+  previous: string | null
+  results: IngestionRun[]
+}
+
+export type PipelineHealth = {
+  total_raw_jobs: number
+  total_canonical_jobs: number
+  total_source_records: number
+  deduplication_rate_pct: number
+  provider_stats: { provider_code: string; total: number }[]
+  recent_runs: {
+    id: string
+    provider: string
+    status: string
+    fetched_count: number
+    error_count: number
+    started_at: string | null
+    ended_at: string | null
+  }[]
+}
+
+export type DataQualityMetrics = {
+  total_canonical_jobs: number
+  missing_salary_pct: number
+  missing_experience_pct: number
+  missing_company_pct: number
+  missing_location_pct: number
+  confidence_distribution: { score: number; count: number }[]
+  work_mode_distribution: { work_mode: string; count: number }[]
+  seniority_distribution: { seniority: string; count: number }[]
+}
+
+export type ConfidenceMonitoring = {
+  average_confidence: number
+  total_classified: number
+  method_distribution: {
+    classification_method: string
+    count: number
+    avg_confidence: number
+  }[]
+  low_confidence_jobs: {
+    id: string
+    title: string
+    company: string
+    role_category: string
+    confidence: number
+    method: string
+  }[]
+}
+
+export type CanonicalJob = {
+  id: string
+  canonical_url: string
+  title: string
+  normalized_title: string
+  company_name_raw: string
+  company_name: string
+  company: string | null
+  location_raw: string
+  location_text: string
+  location: string | null
+  description: string
+  work_mode: string
+  employment_type: string
+  seniority: string
+  experience_text: string
+  salary_text: string
+  posted_date: string | null
+  first_seen: string
+  last_seen: string
+  status: string
+  classification_confidence: number
+  created_at: string
+  updated_at: string
+}
+
+export type RawVsNormalized = {
+  canonical_job: CanonicalJob
+  classification: {
+    role_category: string
+    primary_technologies: string[]
+    secondary_technologies: string[]
+    skills: string[]
+    confidence_score: number
+    method: string
+  } | null
+  source_records: {
+    id: string
+    provider_code: string
+    external_id: string
+    url: string
+    match_type: string
+    raw_title: string
+    raw_company: string
+    raw_location: string
+    raw_description: string
+    fetched_at: string | null
+  }[]
+}
+
+export type MasterCompany = {
+  id: string
+  name: string
+  normalized_name: string
+  domain: string
+  location: string
+  logo_url: string
+  website: string
+  created_at: string
+  updated_at: string
+}
+
+export type MasterLocation = {
+  id: string
+  raw_text: string
+  city: string
+  state: string
+  country: string
+  normalized: string
+  created_at: string
+}
+
+export type MasterJobRole = {
+  id: string
+  name: string
+  category: string
+  created_at: string
+}
+
+export type MasterTechnology = {
+  id: string
+  name: string
+  category: string
+  created_at: string
+}
+
+export type MasterSkill = {
+  id: string
+  name: string
+  technology: string | null
+  technology_name: string
+  created_at: string
+}
+
+// Ingestion pipeline API calls
+
+export function fetchIngestionRuns(params: {
+  provider?: string
+  status?: string
+  search?: string
+  page?: number
+  page_size?: number
+} = {}): Promise<IngestionRunsPage> {
+  const search = new URLSearchParams()
+  if (params.provider) search.set("provider", params.provider)
+  if (params.status) search.set("status", params.status)
+  if (params.search) search.set("search", params.search)
+  if (params.page && params.page > 1) search.set("page", String(params.page))
+  if (params.page_size) search.set("page_size", String(params.page_size))
+  const qs = search.toString()
+  return apiFetch<IngestionRunsPage>(`/admin/ingestion-runs/${qs ? `?${qs}` : ""}`)
+}
+
+export function triggerManualRun(data: {
+  source_id: string
+  keyword?: string
+  location?: string
+  country?: string
+  max_pages?: number
+  min_salary?: number
+  max_salary?: number
+  employment_type?: string
+  work_mode?: string
+  role?: string
+  posted_within?: string
+}): Promise<{ success: boolean; message: string; task_id: string; provider: string }> {
+  return apiFetch("/admin/ingestion/trigger/", {
+    method: "POST",
+    body: JSON.stringify(data),
+  })
+}
+
+export function fetchPipelineHealth(): Promise<PipelineHealth> {
+  return apiFetch<PipelineHealth>("/admin/ingestion/pipeline-health/")
+}
+
+export function fetchDataQuality(): Promise<DataQualityMetrics> {
+  return apiFetch<DataQualityMetrics>("/admin/ingestion/data-quality/")
+}
+
+export function fetchConfidenceMonitoring(): Promise<ConfidenceMonitoring> {
+  return apiFetch<ConfidenceMonitoring>("/admin/ingestion/confidence/")
+}
+
+export function fetchRawVsNormalized(
+  canonicalJobId: string,
+): Promise<RawVsNormalized> {
+  return apiFetch<RawVsNormalized>(
+    `/admin/ingestion/raw-vs-normalized/${canonicalJobId}/`,
+  )
+}
+
+export function fetchDemandMovements(period?: string): Promise<{ movements: DemandMovement[] }> {
+  const qs = period ? `?period=${period}` : ""
+  return apiFetch<{ movements: DemandMovement[] }>(
+    `/admin/ingestion/demand-movements/${qs}`,
+  )
+}
+
+export function triggerSnapshot(): Promise<{ success: boolean; message: string; task_id: string }> {
+  return apiFetch("/admin/ingestion/trigger-snapshot/", { method: "POST" })
+}
+
+export function bulkDeleteIngestionRuns(ids: string[]): Promise<BulkDeleteResult> {
+  return apiFetch<BulkDeleteResult>("/admin/ingestion/bulk-delete-runs/", {
+    method: "POST",
+    body: JSON.stringify({ ids }),
+  })
+}
+
+export function bulkDeleteCanonicalJobs(ids: string[]): Promise<BulkDeleteResult> {
+  return apiFetch<BulkDeleteResult>("/admin/ingestion/bulk-delete-canonicals/", {
+    method: "POST",
+    body: JSON.stringify({ ids }),
+  })
+}
+
+export function purgeAllIngestionData(): Promise<{ success: boolean; message: string; remaining: Record<string, number> }> {
+  return apiFetch("/admin/ingestion/purge-all/", {
+    method: "POST",
+    body: JSON.stringify({ confirm: "CONFIRM_PURGE" }),
+  })
+}
+
+export type CanonicalJobPage = {
+  count: number
+  next: string | null
+  previous: string | null
+  results: CanonicalJob[]
+}
+
+export function fetchCanonicalJobs(params: {
+  search?: string
+  work_mode?: string
+  seniority?: string
+  status?: string
+  page?: number
+  page_size?: number
+} = {}): Promise<CanonicalJobPage> {
+  const search = new URLSearchParams()
+  if (params.search) search.set("search", params.search)
+  if (params.work_mode) search.set("work_mode", params.work_mode)
+  if (params.seniority) search.set("seniority", params.seniority)
+  if (params.status) search.set("status", params.status)
+  if (params.page && params.page > 1) search.set("page", String(params.page))
+  if (params.page_size) search.set("page_size", String(params.page_size))
+  const qs = search.toString()
+  return apiFetch<CanonicalJobPage>(`/admin/canonical-jobs/${qs ? `?${qs}` : ""}`)
+}
+
+// Master data CRUD
+
+export function fetchMasterCompanies(q?: string): Promise<MasterCompany[]> {
+  const qs = q ? `?q=${encodeURIComponent(q)}` : ""
+  return apiFetch<MasterCompany[]>(`/admin/master-companies/${qs}`)
+}
+
+export function createMasterCompany(
+  data: Partial<MasterCompany>,
+): Promise<MasterCompany> {
+  return apiFetch<MasterCompany>("/admin/master-companies/", {
+    method: "POST",
+    body: JSON.stringify(data),
+  })
+}
+
+export function updateMasterCompany(
+  id: string,
+  data: Partial<MasterCompany>,
+): Promise<MasterCompany> {
+  return apiFetch<MasterCompany>(`/admin/master-companies/${id}/`, {
+    method: "PATCH",
+    body: JSON.stringify(data),
+  })
+}
+
+export function deleteMasterCompany(id: string): Promise<void> {
+  return apiFetch(`/admin/master-companies/${id}/`, { method: "DELETE" })
+}
+
+export function fetchMasterLocations(q?: string): Promise<MasterLocation[]> {
+  const qs = q ? `?q=${encodeURIComponent(q)}` : ""
+  return apiFetch<MasterLocation[]>(`/admin/master-locations/${qs}`)
+}
+
+export function createMasterLocation(
+  data: Partial<MasterLocation>,
+): Promise<MasterLocation> {
+  return apiFetch<MasterLocation>("/admin/master-locations/", {
+    method: "POST",
+    body: JSON.stringify(data),
+  })
+}
+
+export function updateMasterLocation(
+  id: string,
+  data: Partial<MasterLocation>,
+): Promise<MasterLocation> {
+  return apiFetch<MasterLocation>(`/admin/master-locations/${id}/`, {
+    method: "PATCH",
+    body: JSON.stringify(data),
+  })
+}
+
+export function deleteMasterLocation(id: string): Promise<void> {
+  return apiFetch(`/admin/master-locations/${id}/`, { method: "DELETE" })
+}
+
+export function fetchMasterRoles(): Promise<MasterJobRole[]> {
+  return apiFetch<MasterJobRole[]>("/admin/master-roles/")
+}
+
+export function createMasterRole(
+  data: Partial<MasterJobRole>,
+): Promise<MasterJobRole> {
+  return apiFetch<MasterJobRole>("/admin/master-roles/", {
+    method: "POST",
+    body: JSON.stringify(data),
+  })
+}
+
+export function updateMasterRole(
+  id: string,
+  data: Partial<MasterJobRole>,
+): Promise<MasterJobRole> {
+  return apiFetch<MasterJobRole>(`/admin/master-roles/${id}/`, {
+    method: "PATCH",
+    body: JSON.stringify(data),
+  })
+}
+
+export function deleteMasterRole(id: string): Promise<void> {
+  return apiFetch(`/admin/master-roles/${id}/`, { method: "DELETE" })
+}
+
+export function fetchMasterTechnologies(): Promise<MasterTechnology[]> {
+  return apiFetch<MasterTechnology[]>("/admin/master-technologies/")
+}
+
+export function createMasterTechnology(
+  data: Partial<MasterTechnology>,
+): Promise<MasterTechnology> {
+  return apiFetch<MasterTechnology>("/admin/master-technologies/", {
+    method: "POST",
+    body: JSON.stringify(data),
+  })
+}
+
+export function updateMasterTechnology(
+  id: string,
+  data: Partial<MasterTechnology>,
+): Promise<MasterTechnology> {
+  return apiFetch<MasterTechnology>(`/admin/master-technologies/${id}/`, {
+    method: "PATCH",
+    body: JSON.stringify(data),
+  })
+}
+
+export function deleteMasterTechnology(id: string): Promise<void> {
+  return apiFetch(`/admin/master-technologies/${id}/`, { method: "DELETE" })
+}
+
+export function fetchMasterSkills(): Promise<MasterSkill[]> {
+  return apiFetch<MasterSkill[]>("/admin/master-skills/")
+}
+
+export function createMasterSkill(
+  data: Partial<MasterSkill>,
+): Promise<MasterSkill> {
+  return apiFetch<MasterSkill>("/admin/master-skills/", {
+    method: "POST",
+    body: JSON.stringify(data),
+  })
+}
+
+export function updateMasterSkill(
+  id: string,
+  data: Partial<MasterSkill>,
+): Promise<MasterSkill> {
+  return apiFetch<MasterSkill>(`/admin/master-skills/${id}/`, {
+    method: "PATCH",
+    body: JSON.stringify(data),
+  })
+}
+
+export function deleteMasterSkill(id: string): Promise<void> {
+  return apiFetch(`/admin/master-skills/${id}/`, { method: "DELETE" })
+}
+
+// LLM Configuration
+
+export type LLMProviderInfo = {
+  label: string
+  models: string[]
+}
+
+export type LLMConfig = {
+  provider: string
+  model: string
+  providers: Record<string, LLMProviderInfo>
+}
+
+export function fetchLLMConfig(): Promise<LLMConfig> {
+  return apiFetch<LLMConfig>("/admin/llm-config/")
+}
+
+export function updateLLMConfig(data: {
+  provider: string
+  model: string
+}): Promise<{ success: boolean; provider: string; model: string }> {
+  return apiFetch("/admin/llm-config/update/", {
+    method: "POST",
+    body: JSON.stringify(data),
+  })
+}
+
+// ---------------------------------------------------------------------------
+// CEO / Management Intelligence
+// ---------------------------------------------------------------------------
+
+export type ExecutiveSummary = {
+  total_jobs: number
+  active_jobs: number
+  expired_jobs: number
+  top_hubs: { location_raw: string; job_count: number }[]
+  top_companies: { company_name_raw: string; job_count: number }[]
+  top_roles: { role_category: string; count: number }[]
+  daily_active: Record<string, number>
+}
+
+export type DemandMovement = {
+  id?: string
+  role_category: string
+  period_start: string
+  period_end: string
+  active_jobs_start: number
+  active_jobs_end: number
+  new_postings: number
+  expired_postings: number
+  net_change: number
+  change_percentage: number
+}
+
+export type SkillSummary = {
+  top_technologies: { name: string; count: number }[]
+  top_skills: { name: string; count: number }[]
+}
+
+export function fetchExecutiveSummary(): Promise<ExecutiveSummary> {
+  return apiFetch<ExecutiveSummary>("/ceo/executive-summary/")
+}
+
+export function fetchCEODemandMovements(period?: number): Promise<{ period_days: number; movements: DemandMovement[] }> {
+  const qs = period ? `?period=${period}` : ""
+  return apiFetch(`/ceo/demand-movements/${qs}`)
+}
+
+export function fetchCEOSkillSummary(): Promise<SkillSummary> {
+  return apiFetch<SkillSummary>("/ceo/skill-summary/")
+}
+
+// ---------------------------------------------------------------------------
+// Market Analyst - Trend Engine
+// ---------------------------------------------------------------------------
+
+export type TrendData = {
+  period_days: number
+  group_by: string
+  trends: {
+    role_category: string
+    total_new: number | null
+    total_expired: number | null
+    total_net: number | null
+    avg_change_pct: number | null
+  }[]
+}
+
+export type JobTraceability = {
+  canonical_job: {
+    id: string
+    title: string
+    company_name_raw: string
+    location_raw: string
+    status: string
+    first_seen: string | null
+    last_seen: string | null
+  }
+  source_records: {
+    id: string
+    provider_code: string
+    external_id: string
+    url: string
+    dedup_match_type: string
+    raw_title: string
+    raw_company: string
+    raw_location: string
+    raw_url: string
+    fetched_at: string | null
+  }[]
+  classification: {
+    role_category: string
+    primary_technologies: string[]
+    secondary_technologies: string[]
+    skills: string[]
+    confidence_score: number
+    classification_method: string
+  } | null
+}
+
+export function fetchDemandTrends(period?: number, groupBy?: string): Promise<TrendData> {
+  const params = new URLSearchParams()
+  if (period) params.set("period", String(period))
+  if (groupBy) params.set("group_by", groupBy)
+  const qs = params.toString()
+  return apiFetch(`/analyst/trends/${qs ? `?${qs}` : ""}`)
+}
+
+export function fetchJobTraceability(jobId: string): Promise<JobTraceability> {
+  return apiFetch(`/analyst/job-traceability/${jobId}/`)
+}
+
+// ---------------------------------------------------------------------------
+// Training Manager - Skill Matrix
+// ---------------------------------------------------------------------------
+
+export type SkillMatrixEntry = {
+  role_category: string
+  total_jobs: number
+  top_technologies: { name: string; count: number }[]
+  top_skills: { name: string; count: number }[]
+}
+
+export type EmergingSkill = {
+  name: string
+  recent_count: number
+  older_count: number
+  change_percentage: number
+  trend: "emerging" | "growing" | "stable" | "declining"
+}
+
+export function fetchSkillMatrix(): Promise<{ matrix: SkillMatrixEntry[] }> {
+  return apiFetch("/training/skill-matrix/")
+}
+
+export function fetchEmergingSkills(): Promise<{ trending: EmergingSkill[]; declining: EmergingSkill[]; emerging: EmergingSkill[] }> {
+  return apiFetch("/training/emerging-skills/")
+}
+
+// ---------------------------------------------------------------------------
+// Recruitment Team - Employer Intelligence
+// ---------------------------------------------------------------------------
+
+export type RecurringHiringCompany = {
+  company_name_raw: string
+  total_postings: number
+  unique_roles: number
+}
+
+export type EmployerScore = {
+  id: string
+  company_name: string
+  company_id: string
+  period_start: string
+  period_end: string
+  total_postings: number
+  active_postings: number
+  unique_roles: number
+  hiring_score: number
+}
+
+export function fetchRecurringHiring(): Promise<{ companies: RecurringHiringCompany[]; total_companies: number }> {
+  return apiFetch("/recruitment/recurring-hiring/")
+}
+
+export function fetchEmployerScores(minScore?: number, maxScore?: number): Promise<{ scores: EmployerScore[] }> {
+  const params = new URLSearchParams()
+  if (minScore !== undefined) params.set("min_score", String(minScore))
+  if (maxScore !== undefined) params.set("max_score", String(maxScore))
+  const qs = params.toString()
+  return apiFetch(`/recruitment/employer-scores/${qs ? `?${qs}` : ""}`)
+}

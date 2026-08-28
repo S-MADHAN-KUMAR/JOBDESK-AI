@@ -1,6 +1,7 @@
 """SerpApi Google Jobs provider connector."""
 
 import hashlib
+from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List
 
 import requests
@@ -11,7 +12,11 @@ DEFAULT_BASE_URL = "https://serpapi.com/search.json"
 
 
 class SerpApiProvider(JobSourceProvider):
-    """SerpApi Google Jobs connector."""
+    """SerpApi Google Jobs connector.
+
+    Each page returns up to 10 results.  ``max_pages`` controls how many
+    pages are fetched so the total job count equals ``10 * max_pages``.
+    """
 
     def _api_key(self) -> str:
         key = extract_api_key(self.config.get_auth_config())
@@ -29,7 +34,7 @@ class SerpApiProvider(JobSourceProvider):
             res.raise_for_status()
         except requests.RequestException as exc:
             raise ProviderError(f"SerpApi request failed: {exc}") from exc
-        
+
         data = res.json()
         if isinstance(data, dict) and data.get("error"):
             raise ProviderError(f"SerpApi error: {data['error']}")
@@ -39,7 +44,8 @@ class SerpApiProvider(JobSourceProvider):
         keyword = filters.get("keyword") or self.config.default_params.get("keyword", "")
         location = filters.get("location") or self.config.default_params.get("location", "")
         pages = int(filters.get("max_pages") or self.config.default_params.get("max_pages") or 1)
-        
+        posted_within = filters.get("posted_within") or self.config.default_params.get("posted_within", "")
+
         if not keyword:
             raise ProviderError("A search keyword is required.")
 
@@ -60,23 +66,62 @@ class SerpApiProvider(JobSourceProvider):
             results = data.get("jobs_results") or []
             jobs.extend(results)
 
-            # Retrieve token for the next iteration
             next_page_token = (
                 data.get("serpapi_pagination", {}).get("next_page_token")
                 or data.get("pagination", {}).get("next_page_token")
             )
 
-            # Stop if no items returned or no further pages available
             if not results or not next_page_token:
                 break
 
+        # Client-side date filtering when posted_within is specified
+        if posted_within and jobs:
+            cutoff = self._posted_within_cutoff(posted_within)
+            if cutoff:
+                jobs = [r for r in jobs if self._is_within_date_range(r, cutoff)]
+
         return jobs
 
+    @staticmethod
+    def _posted_within_cutoff(posted_within: str) -> datetime | None:
+        now = datetime.now(timezone.utc)
+        deltas = {
+            '24h': timedelta(hours=24),
+            '2d': timedelta(days=2),
+            '3d': timedelta(days=3),
+            'week': timedelta(days=7),
+            '10d': timedelta(days=10),
+            'month': timedelta(days=30),
+        }
+        delta = deltas.get(posted_within)
+        return now - delta if delta else None
+
+    @staticmethod
+    def _is_within_date_range(job: Dict[str, Any], cutoff: datetime) -> bool:
+        extensions = job.get("detected_extensions") or {}
+        posted_at = extensions.get("posted_at") or ""
+        if not posted_at:
+            return True
+        posted_at = posted_at.lower().strip()
+        try:
+            if "just now" in posted_at or "minute" in posted_at or "hour" in posted_at:
+                return True
+            if "day" in posted_at:
+                days = int(''.join(c for c in posted_at.split("day")[0] if c.isdigit()) or "0")
+                return datetime.now(timezone.utc) - timedelta(days=days) >= cutoff
+            if "week" in posted_at:
+                weeks = int(''.join(c for c in posted_at.split("week")[0] if c.isdigit()) or "0")
+                return datetime.now(timezone.utc) - timedelta(weeks=weeks) >= cutoff
+            if "month" in posted_at:
+                months = int(''.join(c for c in posted_at.split("month")[0] if c.isdigit()) or "0")
+                return datetime.now(timezone.utc) - timedelta(days=months * 30) >= cutoff
+        except (ValueError, IndexError):
+            pass
+        return True
+
     def fetch_job_detail(self, external_id: str) -> Dict[str, Any]:
-        """Fetch full listing detail using job_id."""
         if not external_id:
             raise ProviderError("Job ID is required to fetch details.")
-            
         data = self._get({
             "engine": "google_jobs_listing",
             "q": external_id,
@@ -84,13 +129,11 @@ class SerpApiProvider(JobSourceProvider):
         return data.get("salaries") or data.get("apply_options") or data
 
     def normalize_source_record(self, raw_payload: Dict[str, Any]) -> Dict[str, Any]:
-        # Prioritize SerpApi's standard `job_id`
         external_id = (
             raw_payload.get("job_id")
             or raw_payload.get("google_job_id")
             or hashlib.sha256(str(raw_payload.get("link", "")).encode()).hexdigest()
         )
-
         return {
             "external_id": str(external_id),
             "url": raw_payload.get("link") or "",

@@ -1,6 +1,7 @@
 """Coresignal CDAPI v2 provider connector (Base Jobs API)."""
 
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List
 
 import requests
@@ -10,16 +11,27 @@ from .base import JobSourceProvider, ProviderError, extract_api_key, strip_html
 DEFAULT_BASE_URL = "https://api.coresignal.com/cdapi"
 SEARCH_FILTER_PATH = "/v2/job_base/search/filter"
 COLLECT_PATH = "/v2/job_base/collect"
-MAX_COLLECT_PER_RUN = 50
 COLLECT_WORKERS = 8
+
+POSTED_WITHIN_DAYS = {
+    '24h': 1,
+    '2d': 2,
+    '3d': 3,
+    'week': 7,
+    '10d': 10,
+    'month': 30,
+}
 
 
 class CoresignalProvider(JobSourceProvider):
     """
     Coresignal Base Jobs API connector.
 
-    Search (`POST /v2/job_base/search/filter`) returns only job IDs;
-    full records are fetched per ID via `GET /v2/job_base/collect/{id}`.
+    Search (``POST /v2/job_base/search/filter``) returns job IDs;
+    full records are fetched per-ID via ``GET /v2/job_base/collect/{id}``.
+
+    The ``max_pages`` filter maps to the number of job IDs requested
+    from the search filter endpoint (``items_per_page``).
     """
 
     def _api_key(self) -> str:
@@ -43,7 +55,7 @@ class CoresignalProvider(JobSourceProvider):
             "Content-Type": "application/json",
         }
 
-    def _request(self, method: str, url: str, **kwargs) -> Dict[str, Any]:
+    def _request(self, method: str, url: str, **kwargs) -> Any:
         try:
             res = requests.request(method, url, headers=self._headers(), timeout=60, **kwargs)
             res.raise_for_status()
@@ -51,15 +63,41 @@ class CoresignalProvider(JobSourceProvider):
             raise ProviderError(f"Coresignal request failed: {exc}") from exc
         return res.json()
 
+    def _extract_ids(self, raw: Any) -> List[str]:
+        """Normalise the search/filter response to a flat list of ID strings.
+
+        The Coresignal search/filter endpoint can return:
+        - a plain JSON list of ID strings
+        - ``{"data": [<id>, ...]}``
+        - ``{"results": [{"id": <id>}, ...]}``
+        """
+        if isinstance(raw, list):
+            return [str(item) for item in raw]
+        if isinstance(raw, dict):
+            for key in ("data", "results", "ids", "items"):
+                inner = raw.get(key)
+                if isinstance(inner, list) and inner:
+                    first = inner[0]
+                    if isinstance(first, (str, int)):
+                        return [str(item) for item in inner]
+                    if isinstance(first, dict):
+                        id_val = first.get("id") or first.get("job_id")
+                        if id_val is not None:
+                            return [str(item.get("id") or item.get("job_id", "")) for item in inner]
+        raise ProviderError("Coresignal search returned an unexpected response format.")
+
     def search_jobs(self, filters: Dict[str, Any]) -> List[Dict[str, Any]]:
         keyword = filters.get("keyword") or self.config.default_params.get("keyword", "")
         location = filters.get("location") or self.config.default_params.get("location", "")
-        pages = int(filters.get("max_pages") or self.config.default_params.get("max_pages") or 1)
+        max_jobs = int(filters.get("max_pages") or self.config.default_params.get("max_pages") or 10)
+        posted_within = filters.get("posted_within") or self.config.default_params.get("posted_within", "")
+
         if not keyword:
             raise ProviderError("A search keyword is required.")
 
         base = self._base_url()
-        items = max(1, min(MAX_COLLECT_PER_RUN, pages * 50))
+
+        # Build search filter body per Coresignal docs
         body: Dict[str, Any] = {
             "deleted": False,
             "application_active": True,
@@ -69,17 +107,28 @@ class CoresignalProvider(JobSourceProvider):
         if location:
             body["location"] = location
 
-        ids = self._request(
+        # Add date filter directly in the search body when possible
+        if posted_within:
+            max_days = POSTED_WITHIN_DAYS.get(posted_within)
+            if max_days:
+                cutoff_dt = datetime.now(timezone.utc) - timedelta(days=max_days)
+                body["created_at_gte"] = cutoff_dt.strftime("%Y-%m-%d %H:%M:%S")
+
+        # Request exactly the number of IDs we need
+        raw = self._request(
             "POST",
             f"{base}{SEARCH_FILTER_PATH}",
-            params={"items_per_page": items},
+            params={"items_per_page": max_jobs},
             json=body,
         )
-        if not isinstance(ids, list):
-            raise ProviderError("Coresignal search returned an unexpected response.")
+        ids = self._extract_ids(raw)
         if not ids:
             return []
 
+        # Cap to exactly max_jobs
+        ids = ids[:max_jobs]
+
+        # Collect full records in parallel
         records: List[Dict[str, Any]] = []
         with ThreadPoolExecutor(max_workers=min(COLLECT_WORKERS, len(ids))) as pool:
             futures = {
@@ -95,10 +144,29 @@ class CoresignalProvider(JobSourceProvider):
                 if isinstance(record, dict):
                     records.append(record)
                 else:
-                    # Free search/filter fallback: keep the ID so the run still
-                    # stores a traceable record when collect credits run out.
                     records.append({"id": job_id})
+
+        # Client-side date fallback when server-side filter wasn't applied
+        if posted_within and records and "created_at_gte" not in body:
+            max_days = POSTED_WITHIN_DAYS.get(posted_within)
+            if max_days:
+                cutoff = datetime.now(timezone.utc) - timedelta(days=max_days)
+                records = [r for r in records if self._is_within_date_range(r, cutoff)]
+
         return records
+
+    @staticmethod
+    def _is_within_date_range(record: Dict[str, Any], cutoff: datetime) -> bool:
+        posted_at = record.get("posted_at") or record.get("created") or record.get("created_at") or ""
+        if not posted_at:
+            return True
+        try:
+            if isinstance(posted_at, str):
+                dt = datetime.fromisoformat(posted_at.replace("Z", "+00:00"))
+                return dt >= cutoff
+        except (ValueError, TypeError):
+            pass
+        return True
 
     def fetch_job_detail(self, external_id: str) -> Dict[str, Any]:
         base = self._base_url()
@@ -120,13 +188,14 @@ class CoresignalProvider(JobSourceProvider):
     def health_check(self) -> bool:
         try:
             base = self._base_url()
-            ids = self._request(
+            raw = self._request(
                 "POST",
                 f"{base}{SEARCH_FILTER_PATH}",
                 params={"items_per_page": 1},
                 json={"title": "test", "deleted": False, "application_active": True},
             )
-            return isinstance(ids, list)
+            ids = self._extract_ids(raw)
+            return True
         except ProviderError:
             return False
 

@@ -1,6 +1,6 @@
 "use client"
 
-import { useCallback, useEffect, useMemo, useState } from "react"
+import { useEffect, useMemo, useState } from "react"
 import Link from "next/link"
 import { useRouter } from "next/navigation"
 import {
@@ -50,15 +50,11 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog"
 import { AppShell } from "@/components/app-shell"
-import { Loader } from "@/components/loader"
 import { cn } from "@/lib/utils"
+import { useProfile, useRawJobs, useJobProviders } from "@/lib/hooks"
 import {
   type RawJob,
-  type User,
   deleteRawJobs,
-  fetchJobProviders,
-  fetchProfile,
-  fetchRawJobs,
   runCompanyEnrichment,
 } from "@/lib/api"
 
@@ -76,20 +72,29 @@ type EnrichState = {
 
 export default function JobExplorerPage() {
   const router = useRouter()
-  const [me, setMe] = useState<User | null>(null)
-  const [loading, setLoading] = useState(true)
+  const { data: me, isLoading: profileLoading, error: profileError } = useProfile()
   const [error, setError] = useState<string | null>(null)
-
-  const [providers, setProviders] = useState<string[]>([])
-  const [jobs, setJobs] = useState<RawJob[]>([])
-  const [total, setTotal] = useState(0)
-  const [hasNext, setHasNext] = useState(false)
-  const [hasPrev, setHasPrev] = useState(false)
 
   const [query, setQuery] = useState("")
   const [provider, setProvider] = useState<string>("all")
   const [page, setPage] = useState(1)
   const [detail, setDetail] = useState<RawJob | null>(null)
+
+  const { data: providers = [] } = useJobProviders()
+  const {
+    data: jobsData,
+    isLoading: jobsLoading,
+    refetch: refetchJobs,
+  } = useRawJobs({
+    q: query.trim() || undefined,
+    provider: provider === "all" ? undefined : provider,
+    page,
+  })
+
+  const jobs = Array.isArray(jobsData) ? jobsData : (jobsData?.results ?? [])
+  const total = Array.isArray(jobsData) ? jobsData.length : (jobsData?.count ?? 0)
+  const hasNext = Boolean(jobsData && !Array.isArray(jobsData) && jobsData.next)
+  const hasPrev = Boolean(jobsData && !Array.isArray(jobsData) && jobsData.previous)
 
   const [selected, setSelected] = useState<Set<string>>(new Set())
   const [selectionMode, setSelectionMode] = useState(false)
@@ -99,59 +104,9 @@ export default function JobExplorerPage() {
   const [enriching, setEnriching] = useState(false)
   const [enrichState, setEnrichState] = useState<EnrichState[]>([])
 
-  const load = useCallback(
-    async (q: string, prov: string, p: number) => {
-      setLoading(true)
-      setError(null)
-      try {
-        const data = await fetchRawJobs({
-          q: q.trim() || undefined,
-          provider: prov === "all" ? undefined : prov,
-          page: p,
-        })
-        setJobs(Array.isArray(data) ? data : (data.results ?? []))
-        setTotal(Array.isArray(data) ? data.length : (data.count ?? 0))
-        setHasNext(Boolean(data.next))
-        setHasPrev(Boolean(data.previous))
-        setSelected(new Set())
-      } catch (err) {
-        setError(err instanceof Error ? err.message : "Failed to load jobs")
-      } finally {
-        setLoading(false)
-      }
-    },
-    [],
-  )
-
   useEffect(() => {
-    let cancelled = false
-    fetchProfile()
-      .then((profile) => {
-        if (cancelled) return
-        setMe(profile)
-        if (profile.role !== "ADMIN" && profile.role !== "MARKET_ANALYST") {
-          setError("Access denied: Job Explorer is available to Market Analysts.")
-          return
-        }
-        void load("", "all", 1)
-      })
-      .catch(() => {
-        if (!cancelled) router.push("/login")
-      })
-    fetchJobProviders()
-      .then((list) => {
-        if (!cancelled) setProviders(list)
-      })
-      .catch(() => {
-        // provider filter is optional
-      })
-      .finally(() => {
-        if (!cancelled) setLoading(false)
-      })
-    return () => {
-      cancelled = true
-    }
-  }, [router, load])
+    if (profileError) router.push("/login")
+  }, [profileError, router])
 
   const enrichTargets = useMemo(() => {
     const byCompany = new Map<string, { location: string; titles: Set<string> }>()
@@ -178,7 +133,7 @@ export default function JobExplorerPage() {
 
   function applyFilters(p = 1) {
     setPage(p)
-    void load(query, provider, p)
+    setSelected(new Set())
   }
 
   function toggleJob(id: string) {
@@ -205,11 +160,12 @@ export default function JobExplorerPage() {
     setDeleting(true)
     setError(null)
     try {
-      const res = await deleteRawJobs([...selected])
+      await deleteRawJobs([...selected])
       setDeleteOpen(false)
       setSelected(new Set())
+      setSelectionMode(false)
       setError(null)
-      void load(query, provider, page)
+      void refetchJobs()
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to delete jobs")
       setDeleteOpen(false)
@@ -270,20 +226,12 @@ export default function JobExplorerPage() {
     setEnriching(false)
   }
 
-  if (loading && me === null) {
-    return (
-      <main className="flex min-h-dvh flex-col items-center justify-center bg-background">
-        <Loader label="Loading job records..." />
-      </main>
-    )
-  }
-
   if (!me) return null
 
   const allSelected = jobs.length > 0 && selected.size === jobs.length
 
   return (
-    <AppShell user={me}>
+    <AppShell user={me} loading={profileLoading}>
       <div className="p-4 sm:p-6 space-y-6">
         <div>
           <h1 className="text-2xl font-bold tracking-tight text-foreground">Job Explorer</h1>
@@ -345,7 +293,7 @@ export default function JobExplorerPage() {
             <Button
               onClick={() => applyFilters(1)}
               data-icon="inline-start"
-              disabled={loading}
+              disabled={jobsLoading}
             >
               <Search data-icon="inline-start" />
               Search
@@ -407,9 +355,10 @@ export default function JobExplorerPage() {
               </div>
             </CardHeader>
             <CardContent className="p-0">
-              {loading ? (
-                <div className="flex justify-center py-12">
-                  <Loader label="Fetching records..." />
+              {jobsLoading ? (
+                <div className="flex justify-center items-center gap-2 py-12 text-muted-foreground">
+                  <Loader2 className="size-5 animate-spin" />
+                  <span className="text-sm">Fetching records...</span>
                 </div>
               ) : jobs.length === 0 ? (
                 <div className="flex flex-col items-center gap-2 px-4 py-16 text-center">
@@ -492,11 +441,10 @@ export default function JobExplorerPage() {
                 <Button
                   variant="outline"
                   size="sm"
-                  disabled={!hasPrev || loading}
+                  disabled={!hasPrev || jobsLoading}
                   onClick={() => {
-                    const next = page - 1
-                    setPage(next)
-                    void load(query, provider, next)
+                    setSelected(new Set())
+                    setPage(page - 1)
                   }}
                   data-icon="inline-start"
                 >
@@ -507,11 +455,10 @@ export default function JobExplorerPage() {
                 <Button
                   variant="outline"
                   size="sm"
-                  disabled={!hasNext || loading}
+                  disabled={!hasNext || jobsLoading}
                   onClick={() => {
-                    const next = page + 1
-                    setPage(next)
-                    void load(query, provider, next)
+                    setSelected(new Set())
+                    setPage(page + 1)
                   }}
                   data-icon="inline-end"
                 >

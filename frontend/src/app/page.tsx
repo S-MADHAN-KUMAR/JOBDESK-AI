@@ -6,8 +6,11 @@ import { useRouter } from "next/navigation"
 import {
   ArrowUpRight,
   ArrowUpRight as TrendUp,
+  BarChart3,
   BriefcaseBusiness,
+  Building2,
   Cable,
+  Layers,
   LayoutDashboard,
   Sparkles,
   TrendingUp,
@@ -22,8 +25,8 @@ import {
   CardTitle,
 } from "@/components/ui/card"
 import { AppShell } from "@/components/app-shell"
-import { Loader } from "@/components/loader"
-import { ROLE_LABELS, type User, fetchProfile } from "@/lib/api"
+import { ROLE_LABELS, type User } from "@/lib/api"
+import { useProfile } from "@/lib/hooks"
 import { cn } from "@/lib/utils"
 
 const QUICK_LINKS = [
@@ -44,12 +47,44 @@ const QUICK_LINKS = [
     tile: "bg-chart-2/10 text-chart-2",
   },
   {
+    href: "/ceo",
+    title: "Executive Summary",
+    description: "Market overview and strategic intelligence",
+    icon: BarChart3,
+    roles: ["ADMIN", "CEO_MANAGEMENT"],
+    tile: "bg-chart-3/10 text-chart-3",
+  },
+  {
+    href: "/trends",
+    title: "Demand Trends",
+    description: "7/30/60/90-day hiring demand movements",
+    icon: TrendingUp,
+    roles: ["ADMIN", "MARKET_ANALYST"],
+    tile: "bg-chart-4/10 text-chart-4",
+  },
+  {
+    href: "/training",
+    title: "Skill Intelligence",
+    description: "Technology and skill matrices by role",
+    icon: Layers,
+    roles: ["ADMIN", "TRAINING_MANAGER"],
+    tile: "bg-amber-500/10 text-amber-600",
+  },
+  {
+    href: "/recruitment",
+    title: "Employer Intelligence",
+    description: "Hiring patterns and opportunity scores",
+    icon: Building2,
+    roles: ["ADMIN", "RECRUITMENT_TEAM"],
+    tile: "bg-emerald-500/10 text-emerald-600",
+  },
+  {
     href: "/admin/users",
     title: "User Management",
     description: "Create users and assign roles",
     icon: Users,
     roles: ["ADMIN"],
-    tile: "bg-chart-3/10 text-chart-3",
+    tile: "bg-chart-5/10 text-chart-5",
   },
   {
     href: "/admin/sources",
@@ -57,7 +92,7 @@ const QUICK_LINKS = [
     description: "Configure and run job ingestion",
     icon: Cable,
     roles: ["ADMIN"],
-    tile: "bg-chart-4/10 text-chart-4",
+    tile: "bg-rose-500/10 text-rose-600",
   },
 ]
 
@@ -94,32 +129,20 @@ const RECENT_ACTIVITY = [
 
 export default function Home() {
   const router = useRouter()
-  const [me, setMe] = useState<User | null>(null)
-  const [loading, setLoading] = useState(true)
+  const { data: me, isLoading: loading, error } = useProfile()
 
   useEffect(() => {
-    fetchProfile()
-      .then(setMe)
-      .catch(() => router.push("/login"))
-      .finally(() => setLoading(false))
-  }, [router])
-
-  if (loading) {
-    return (
-      <main className="flex min-h-dvh flex-col items-center justify-center bg-background">
-        <Loader label="Loading..." />
-      </main>
-    )
-  }
+    if (error) router.push("/login")
+  }, [error, router])
 
   if (!me) return null
 
-  const visibleLinks = QUICK_LINKS.filter((link) =>
-    link.roles.includes(me.role),
-  )
+  const visibleLinks = me
+    ? QUICK_LINKS.filter((link) => link.roles.includes(me.role))
+    : []
 
   return (
-    <AppShell user={me}>
+    <AppShell user={me} loading={loading}>
       <div className="p-4 sm:p-6 space-y-6">
         <div className="flex items-center justify-between">
           <div>
@@ -127,14 +150,14 @@ export default function Home() {
               Dashboard
             </h1>
             <p className="text-sm text-muted-foreground">
-              Welcome back, {me.first_name || me.username}
+              Welcome back, {me?.first_name || me?.username}
             </p>
           </div>
           <Badge
             variant="outline"
             className="border-primary/30 bg-primary/10 text-primary px-3 py-1 text-xs"
           >
-            {ROLE_LABELS[me.role]}
+            {me ? ROLE_LABELS[me.role] : ""}
           </Badge>
         </div>
 

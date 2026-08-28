@@ -50,16 +50,15 @@ import {
   TableRow,
 } from "@/components/ui/table"
 import { AppShell } from "@/components/app-shell"
-import { Loader } from "@/components/loader"
+import { cn } from "@/lib/utils"
+import { useProfile, useAdminUsers } from "@/lib/hooks"
 import {
   ROLE_LABELS,
   ROLES,
   type User,
   type UserRole,
   apiFetch,
-  fetchProfile,
 } from "@/lib/api"
-import { cn } from "@/lib/utils"
 
 const PAGE_SIZE = 8
 
@@ -125,59 +124,27 @@ function getPageNumbers(current: number, total: number): (number | "ellipsis")[]
 
 export default function AdminUsersPage() {
   const router = useRouter()
-  const [me, setMe] = useState<User | null>(null)
-  const [users, setUsers] = useState<User[]>([])
-  const [loading, setLoading] = useState(true)
+  const { data: me, isLoading: profileLoading, error: profileError } = useProfile()
+  const { data: users = [], isLoading: usersLoading, refetch: refetchUsers } = useAdminUsers()
   const [error, setError] = useState<string | null>(null)
   const [createOpen, setCreateOpen] = useState(false)
   const [saving, setSaving] = useState(false)
   const [newUser, setNewUser] = useState<NewUser>(emptyNewUser)
-  const [reloadKey, setReloadKey] = useState(0)
 
   const [search, setSearch] = useState("")
   const [roleFilter, setRoleFilter] = useState<UserRole | "ALL">("ALL")
   const [page, setPage] = useState(1)
   const [deleteTarget, setDeleteTarget] = useState<User | null>(null)
   const [deleting, setDeleting] = useState(false)
+  const [deactivateTarget, setDeactivateTarget] = useState<User | null>(null)
+  const [deactivating, setDeactivating] = useState(false)
   const [editTarget, setEditTarget] = useState<User | null>(null)
   const [editForm, setEditForm] = useState<EditUserForm | null>(null)
   const [savingEdit, setSavingEdit] = useState(false)
 
-  function refresh() {
-    setReloadKey((key) => key + 1)
-  }
-
   useEffect(() => {
-    let cancelled = false
-
-    async function run() {
-      try {
-        const profile = await fetchProfile()
-        if (cancelled) return
-        setMe(profile)
-        if (profile.role !== "ADMIN") {
-          setError("Access denied: Admin role required.")
-          return
-        }
-        const list = await apiFetch<User[]>("/admin/users/")
-        if (!cancelled) setUsers(list)
-      } catch (err) {
-        if (cancelled) return
-        if (err instanceof Error && err.message === "Session expired") {
-          router.push("/login")
-        } else {
-          setError(err instanceof Error ? err.message : "Failed to load users")
-        }
-      } finally {
-        if (!cancelled) setLoading(false)
-      }
-    }
-
-    void run()
-    return () => {
-      cancelled = true
-    }
-  }, [router, reloadKey])
+    if (profileError) router.push("/login")
+  }, [profileError, router])
 
   const filtered = useMemo(() => {
     const term = search.trim().toLowerCase()
@@ -212,7 +179,7 @@ export default function AdminUsersPage() {
       })
       setCreateOpen(false)
       setNewUser(emptyNewUser)
-      refresh()
+      void refetchUsers()
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to create user")
     } finally {
@@ -226,9 +193,27 @@ export default function AdminUsersPage() {
         method: "PATCH",
         body: JSON.stringify(patch),
       })
-      refresh()
+      refetchUsers()
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to update user")
+    }
+  }
+
+  async function confirmDeactivate() {
+    if (!deactivateTarget) return
+    setDeactivating(true)
+    setError(null)
+    try {
+      await apiFetch(`/admin/users/${deactivateTarget.id}/`, {
+        method: "PATCH",
+        body: JSON.stringify({ is_active: false }),
+      })
+      setDeactivateTarget(null)
+      refetchUsers()
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to deactivate user")
+    } finally {
+      setDeactivating(false)
     }
   }
 
@@ -254,7 +239,7 @@ export default function AdminUsersPage() {
       })
       setEditTarget(null)
       setEditForm(null)
-      refresh()
+      refetchUsers()
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to update user")
     } finally {
@@ -269,7 +254,7 @@ export default function AdminUsersPage() {
     try {
       await apiFetch(`/admin/users/${deleteTarget.id}/`, { method: "DELETE" })
       setDeleteTarget(null)
-      refresh()
+      refetchUsers()
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to delete user")
     } finally {
@@ -279,18 +264,10 @@ export default function AdminUsersPage() {
 
   const hasFilters = search.trim() !== "" || roleFilter !== "ALL"
 
-  if (loading) {
-    return (
-      <main className="flex min-h-dvh flex-col items-center justify-center bg-background">
-        <Loader label="Loading users..." />
-      </main>
-    )
-  }
-
   if (!me) return null
 
   return (
-    <AppShell user={me}>
+    <AppShell user={me} loading={profileLoading}>
       <div className="p-4 sm:p-6 space-y-6">
         <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
           <div>
@@ -542,15 +519,11 @@ export default function AdminUsersPage() {
                                   : undefined
                               }
                               onClick={() => {
-                                if (
-                                  user.is_active &&
-                                  !window.confirm(
-                                    `Deactivate user "${user.username}"? They will lose access immediately.`,
-                                  )
-                                ) {
-                                  return
+                                if (user.is_active) {
+                                  setDeactivateTarget(user)
+                                } else {
+                                  void updateUser(user, { is_active: true })
                                 }
-                                void updateUser(user, { is_active: !user.is_active })
                               }}
                             >
                               {user.is_active ? "Deactivate" : "Activate"}
@@ -859,6 +832,44 @@ export default function AdminUsersPage() {
               </Button>
             </DialogFooter>
           </form>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={deactivateTarget !== null} onOpenChange={(open) => !open && setDeactivateTarget(null)}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Deactivate user</DialogTitle>
+            <DialogDescription>
+              They will lose access immediately. You can re-enable their account at any time.
+            </DialogDescription>
+          </DialogHeader>
+          {deactivateTarget && (
+            <div className="flex items-center gap-3 rounded-lg border bg-muted/50 p-3">
+              <span className="flex size-9 shrink-0 items-center justify-center rounded-full bg-amber-500/10 text-amber-600 dark:text-amber-400">
+                <UserX className="size-4" />
+              </span>
+              <div className="min-w-0">
+                <p className="font-medium">{deactivateTarget.username}</p>
+                <p className="truncate text-sm text-muted-foreground">
+                  {deactivateTarget.email || "No email"} · {ROLE_LABELS[deactivateTarget.role]}
+                </p>
+              </div>
+            </div>
+          )}
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setDeactivateTarget(null)}>
+              Cancel
+            </Button>
+            <Button
+              variant="destructive"
+              onClick={confirmDeactivate}
+              disabled={deactivating}
+              data-icon="inline-start"
+            >
+              {deactivating && <Loader2 className="animate-spin" data-icon="inline-start" />}
+              {deactivating ? "Deactivating..." : "Deactivate user"}
+            </Button>
+          </DialogFooter>
         </DialogContent>
       </Dialog>
 

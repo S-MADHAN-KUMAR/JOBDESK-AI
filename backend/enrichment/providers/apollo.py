@@ -129,7 +129,7 @@ class ApolloProvider(ContactEnrichmentProvider):
                     merged[key] = value
         if webhook_url and data.get("request_id") is not None:
             request_id = data["request_id"]
-            phone_numbers = self._poll_phone_numbers(request_id, attempts=1)
+            phone_numbers = self._poll_phone_numbers(request_id, attempts=3)
             if phone_numbers:
                 merged["phone"] = phone_numbers[0]
             else:

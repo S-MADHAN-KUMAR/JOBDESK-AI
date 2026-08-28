@@ -123,6 +123,25 @@ class IngestionRun(models.Model):
     error_count = models.PositiveIntegerField(default=0)
     error_logs = models.JSONField(default=list, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
+    batch_id = models.UUIDField(null=True, blank=True)
+    celery_task_id = models.CharField(max_length=255, blank=True, default='')
+    classified_count = models.PositiveIntegerField(default=0)
+    current_step = models.CharField(max_length=100, blank=True, default='')
+    duplicate_count = models.PositiveIntegerField(default=0)
+    filters = models.JSONField(default=dict, blank=True)
+    requests_made = models.PositiveIntegerField(default=0)
+    retry_of_id = models.UUIDField(null=True, blank=True)
+    skipped_reason = models.CharField(max_length=500, blank=True, default='')
+    step_logs = models.JSONField(default=list, blank=True)
+    trigger = models.CharField(max_length=50, blank=True, default='manual')
+    triggered_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True, blank=True,
+        related_name='triggered_runs',
+    )
+    unique_count = models.PositiveIntegerField(default=0)
+    valid_count = models.PositiveIntegerField(default=0)
 
     class Meta:
         indexes = [
@@ -152,6 +171,10 @@ class RawJob(models.Model):
     description = models.TextField(blank=True, default='')
     raw_payload = models.JSONField(default=dict, blank=True)
     fetched_at = models.DateTimeField(auto_now_add=True)
+    posted_at = models.DateTimeField(null=True, blank=True)
+    processed_at = models.DateTimeField(null=True, blank=True)
+    processing_error = models.TextField(blank=True, default='')
+    processing_status = models.CharField(max_length=50, blank=True, default='pending')
 
     class Meta:
         indexes = [
@@ -161,3 +184,19 @@ class RawJob(models.Model):
 
     def __str__(self):
         return f"{self.provider_code}:{self.external_id}"
+
+
+# Import ingestion pipeline models so Django detects them for migrations
+from core.ingestion_models import (  # noqa: E402, F401
+    CanonicalJob,
+    EmployerHiringScore,
+    JobClassification,
+    JobDemandMovement,
+    JobSnapshot,
+    JobSourceRecord,
+    MasterCompany,
+    MasterJobRole,
+    MasterLocation,
+    MasterSkill,
+    MasterTechnology,
+)

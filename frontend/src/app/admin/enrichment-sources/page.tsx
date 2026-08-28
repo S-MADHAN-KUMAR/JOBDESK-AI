@@ -5,10 +5,9 @@ import { useRouter } from "next/navigation"
 import { Switch } from "@base-ui/react/switch"
 import {
   Activity,
-  CircleCheck,
-  CircleX,
-  Clock,
+  Cable,
   ContactRound,
+  Clock,
   Gauge,
   KeyRound,
   Loader2,
@@ -17,7 +16,6 @@ import {
   ShieldAlert,
   Trash2,
   WifiOff,
-  Wrench,
 } from "lucide-react"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
@@ -38,20 +36,15 @@ import {
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { AppShell } from "@/components/app-shell"
-import { Loader } from "@/components/loader"
+import { cn } from "@/lib/utils"
+import { useProfile, useEnrichmentSources } from "@/lib/hooks"
 import {
   type EnrichmentSource,
   type EnrichmentSourceInput,
   type HealthStatus,
-  type TestConnectionResult,
-  type User,
   createEnrichmentSource,
-  fetchEnrichmentSources,
-  fetchProfile,
-  testEnrichmentSource,
   updateEnrichmentSource,
 } from "@/lib/api"
-import { cn } from "@/lib/utils"
 
 const HEALTH_META: Record<
   HealthStatus,
@@ -135,11 +128,10 @@ function formToInput(form: FormState): EnrichmentSourceInput {
 
 export default function AdminEnrichmentSourcesPage() {
   const router = useRouter()
-  const [me, setMe] = useState<User | null>(null)
-  const [sources, setSources] = useState<EnrichmentSource[]>([])
-  const [loading, setLoading] = useState(true)
+  const { data: me, isLoading: profileLoading, error: profileError } = useProfile()
+  const { data: sourcesPage, isLoading: sourcesLoading, refetch: refetchSources } = useEnrichmentSources()
+  const sources = sourcesPage?.results ?? []
   const [error, setError] = useState<string | null>(null)
-  const [reloadKey, setReloadKey] = useState(0)
 
   const [formOpen, setFormOpen] = useState(false)
   const [editing, setEditing] = useState<EnrichmentSource | null>(null)
@@ -150,49 +142,12 @@ export default function AdminEnrichmentSourcesPage() {
   const [apiKey, setApiKey] = useState("")
   const [savingCreds, setSavingCreds] = useState(false)
 
-  const [testingId, setTestingId] = useState<string | null>(null)
-  const [testResults, setTestResults] = useState<
-    Record<string, TestConnectionResult>
-  >({})
-
   const [deleteTarget, setDeleteTarget] = useState<EnrichmentSource | null>(null)
   const [deleting, setDeleting] = useState(false)
 
-  function refresh() {
-    setReloadKey((key) => key + 1)
-  }
-
   useEffect(() => {
-    let cancelled = false
-
-    async function run() {
-      try {
-        const profile = await fetchProfile()
-        if (cancelled) return
-        setMe(profile)
-        if (profile.role !== "ADMIN") {
-          setError("Access denied: Admin role required.")
-          return
-        }
-        const list = await fetchEnrichmentSources()
-        if (!cancelled) setSources(list)
-      } catch (err) {
-        if (cancelled) return
-        if (err instanceof Error && err.message === "Session expired") {
-          router.push("/login")
-        } else {
-          setError(err instanceof Error ? err.message : "Failed to load providers")
-        }
-      } finally {
-        if (!cancelled) setLoading(false)
-      }
-    }
-
-    void run()
-    return () => {
-      cancelled = true
-    }
-  }, [router, reloadKey])
+    if (profileError) router.push("/login")
+  }, [profileError, router])
 
   function openCreate() {
     setEditing(null)
@@ -217,7 +172,7 @@ export default function AdminEnrichmentSourcesPage() {
         await createEnrichmentSource(formToInput(form))
       }
       setFormOpen(false)
-      refresh()
+      refetchSources()
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to save provider")
     } finally {
@@ -229,7 +184,7 @@ export default function AdminEnrichmentSourcesPage() {
     setError(null)
     try {
       await updateEnrichmentSource(source.id, { is_active: !source.is_active })
-      refresh()
+      refetchSources()
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to toggle provider")
     }
@@ -246,25 +201,11 @@ export default function AdminEnrichmentSourcesPage() {
       })
       setCredTarget(null)
       setApiKey("")
-      refresh()
+      refetchSources()
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to save credentials")
     } finally {
       setSavingCreds(false)
-    }
-  }
-
-  async function runTest(source: EnrichmentSource) {
-    setTestingId(source.id)
-    setError(null)
-    try {
-      const result = await testEnrichmentSource(source.id)
-      setTestResults((prev) => ({ ...prev, [source.id]: result }))
-      refresh()
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Test connection failed")
-    } finally {
-      setTestingId(null)
     }
   }
 
@@ -275,7 +216,7 @@ export default function AdminEnrichmentSourcesPage() {
     try {
       await updateEnrichmentSource(deleteTarget.id, { is_active: false })
       setDeleteTarget(null)
-      refresh()
+      refetchSources()
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to disable provider")
     } finally {
@@ -283,18 +224,10 @@ export default function AdminEnrichmentSourcesPage() {
     }
   }
 
-  if (loading) {
-    return (
-      <main className="flex min-h-dvh flex-col items-center justify-center bg-background">
-        <Loader label="Loading enrichment providers..." />
-      </main>
-    )
-  }
-
   if (!me) return null
 
   return (
-    <AppShell user={me}>
+    <AppShell user={me} loading={profileLoading}>
       <div className="p-4 sm:p-6 space-y-6">
         <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
           <div>
@@ -340,7 +273,6 @@ export default function AdminEnrichmentSourcesPage() {
           <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
             {sources.map((source) => {
               const health = HEALTH_META[source.health_status]
-              const test = testResults[source.id]
               const usagePct = Math.min(
                 100,
                 Math.round((source.current_daily_uses / source.rate_limit_daily) * 100),
@@ -463,24 +395,6 @@ export default function AdminEnrichmentSourcesPage() {
                       </p>
                     </div>
 
-                    {test && (
-                      <div
-                        className={cn(
-                          "flex items-start gap-2 rounded-lg border px-3 py-2 text-sm",
-                          test.success
-                            ? "border-emerald-500/30 bg-emerald-500/5 text-emerald-700 dark:text-emerald-400"
-                            : "border-red-500/30 bg-red-500/5 text-red-700 dark:text-red-400",
-                        )}
-                      >
-                        {test.success ? (
-                          <CircleCheck className="mt-0.5 size-4 shrink-0" />
-                        ) : (
-                          <CircleX className="mt-0.5 size-4 shrink-0" />
-                        )}
-                        <span className="min-w-0">{test.message}</span>
-                      </div>
-                    )}
-
                     <div className="mt-auto flex flex-wrap items-center gap-2 pt-1">
                       <Button
                         variant="outline"
@@ -499,20 +413,6 @@ export default function AdminEnrichmentSourcesPage() {
                       >
                         <KeyRound data-icon="inline-start" />
                         Credentials
-                      </Button>
-                      <Button
-                        variant="secondary"
-                        size="sm"
-                        disabled={testingId === source.id}
-                        onClick={() => void runTest(source)}
-                        data-icon="inline-start"
-                      >
-                        {testingId === source.id ? (
-                          <Loader2 className="animate-spin" data-icon="inline-start" />
-                        ) : (
-                          <Wrench data-icon="inline-start" />
-                        )}
-                        {testingId === source.id ? "Testing..." : "Test connection"}
                       </Button>
                       <Button
                         variant="ghost"

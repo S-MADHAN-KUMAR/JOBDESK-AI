@@ -53,13 +53,12 @@ import {
 import {
   type EnrichedContact,
   type EnrichmentRunResult,
-  type User,
   deleteEnrichedContacts,
   fetchEnrichmentContacts,
-  fetchProfile,
   pollApolloPhones,
   runCompanyEnrichment,
 } from "@/lib/api"
+import { useProfile } from "@/lib/hooks"
 import { cn } from "@/lib/utils"
 
 const VERIFICATION_META: Record<
@@ -109,7 +108,7 @@ export default function EnrichmentPage() {
   return (
     <Suspense
       fallback={
-      <main className="flex min-h-dvh flex-col items-center justify-center bg-background">
+        <main className="flex min-h-dvh flex-col items-center justify-center bg-background">
           <Loader label="Loading enrichment workspace..." />
         </main>
       }
@@ -123,8 +122,7 @@ function EnrichmentContent() {
   const router = useRouter()
   const searchParams = useSearchParams()
   const autoRunRef = useRef(false)
-  const [me, setMe] = useState<User | null>(null)
-  const [loading, setLoading] = useState(true)
+  const { data: me, isLoading: profileLoading, error: profileError } = useProfile()
   const [error, setError] = useState<string | null>(null)
 
   const [companyName, setCompanyName] = useState("")
@@ -195,40 +193,33 @@ function EnrichmentContent() {
   )
 
   useEffect(() => {
-    let cancelled = false
-    fetchProfile()
-      .then((profile) => {
-        if (cancelled) return
-        setMe(profile)
-        if (profile.role !== "ADMIN" && profile.role !== "MARKET_ANALYST") {
-          setError("Access denied: Enrichment is available to Market Analysts.")
-          return
-        }
-        void loadContacts("all", "all", 1)
-
-        const companyParam = searchParams.get("company")
-        const autoRun = searchParams.get("autoRun") === "1"
-        if (autoRun && companyParam && !autoRunRef.current) {
-          autoRunRef.current = true
-          setCompanyName(companyParam)
-          setLocation(searchParams.get("location") ?? "")
-          const titlesParam = searchParams.get("titles")
-          const titlesList = titlesParam
-            ? titlesParam.split(",").map((title) => title.trim()).filter(Boolean)
-            : []
-          void executeRun(companyParam, titlesList, searchParams.get("location") ?? "")
-        }
-      })
-      .catch(() => {
-        if (!cancelled) router.push("/login")
-      })
-      .finally(() => {
-        if (!cancelled) setLoading(false)
-      })
-    return () => {
-      cancelled = true
+    if (profileError) {
+      router.push("/login")
+      return
     }
-  }, [router, loadContacts, executeRun, searchParams])
+  }, [profileError, router])
+
+  useEffect(() => {
+    if (!me || profileLoading) return
+    if (me.role !== "ADMIN" && me.role !== "MARKET_ANALYST") {
+      setError("Access denied: Enrichment is available to Market Analysts.")
+      return
+    }
+    void loadContacts("all", "all", 1)
+
+    const companyParam = searchParams.get("company")
+    const autoRun = searchParams.get("autoRun") === "1"
+    if (autoRun && companyParam && !autoRunRef.current) {
+      autoRunRef.current = true
+      setCompanyName(companyParam)
+      setLocation(searchParams.get("location") ?? "")
+      const titlesParam = searchParams.get("titles")
+      const titlesList = titlesParam
+        ? titlesParam.split(",").map((title) => title.trim()).filter(Boolean)
+        : []
+      void executeRun(companyParam, titlesList, searchParams.get("location") ?? "")
+    }
+  }, [me, profileLoading, loadContacts, executeRun, searchParams])
 
   async function handleRun(e: React.FormEvent) {
     e.preventDefault()
@@ -291,18 +282,10 @@ function EnrichmentContent() {
     }
   }
 
-  if (loading && me === null) {
-    return (
-      <main className="flex min-h-dvh flex-col items-center justify-center bg-background">
-          <Loader label="Loading enrichment workspace..." />
-        </main>
-    )
-  }
-
   if (!me) return null
 
   return (
-    <AppShell user={me}>
+    <AppShell user={me} loading={profileLoading}>
       <div className="p-4 sm:p-6 space-y-6">
         <div>
           <h1 className="text-2xl font-bold tracking-tight text-foreground">Contact Enrichment</h1>
