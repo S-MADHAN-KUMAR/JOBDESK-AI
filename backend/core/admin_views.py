@@ -135,6 +135,7 @@ def trigger_manual_run(request):
     work_mode = request.data.get('work_mode', '')
     role = request.data.get('role', '')
     posted_within = request.data.get('posted_within', '')
+    platforms = request.data.get('platforms')
 
     if not source_id:
         return Response(
@@ -144,9 +145,17 @@ def trigger_manual_run(request):
 
     if source_id == 'all':
         task = run_all_provider_ingestions.delay(
-            keyword, location, country, max_pages,
-            min_salary, max_salary, employment_type, work_mode, role,
-            posted_within,
+            keyword=keyword,
+            location=location,
+            country=country,
+            max_pages=max_pages,
+            min_salary=min_salary,
+            max_salary=max_salary,
+            employment_type=employment_type,
+            work_mode=work_mode,
+            role=role,
+            posted_within=posted_within,
+            platforms=platforms,
         )
         return Response({
             'success': True,
@@ -169,9 +178,18 @@ def trigger_manual_run(request):
         )
 
     task = run_provider_ingestion.delay(
-        str(source.id), keyword, location, country, max_pages,
-        min_salary, max_salary, employment_type, work_mode, role,
-        posted_within,
+        source_id=str(source.id),
+        keyword=keyword,
+        location=location,
+        country=country,
+        max_pages=max_pages,
+        min_salary=min_salary,
+        max_salary=max_salary,
+        employment_type=employment_type,
+        work_mode=work_mode,
+        role=role,
+        posted_within=posted_within,
+        platforms=platforms,
     )
 
     return Response({
@@ -266,11 +284,20 @@ def purge_all_ingestion_data(request):
             status=status.HTTP_400_BAD_REQUEST,
         )
 
-    from django.db import connection
-    with connection.cursor() as cursor:
-        cursor.execute("TRUNCATE TABLE core_jobsnapshots, core_jobdemandmovement, core_employerhiringscore, core_jobclassification, core_jobsourcerecord, core_canonicaljob, core_rawjob, core_ingestionrun CASCADE")
+    # Use ORM deletes (not raw TRUNCATE) so table names stay correct and Neon
+    # transaction-mode poolers do not reject the statement.
+    deleted = {
+        'snapshots': JobSnapshot.objects.all().delete()[0],
+        'demand_movements': JobDemandMovement.objects.all().delete()[0],
+        'employer_scores': EmployerHiringScore.objects.all().delete()[0],
+        'classifications': JobClassification.objects.all().delete()[0],
+        'source_records': JobSourceRecord.objects.all().delete()[0],
+        'canonical_jobs': CanonicalJob.objects.all().delete()[0],
+        'raw_jobs': RawJob.objects.all().delete()[0],
+        'ingestion_runs': IngestionRun.objects.all().delete()[0],
+    }
 
-    counts = {
+    remaining = {
         'ingestion_runs': IngestionRun.objects.count(),
         'raw_jobs': RawJob.objects.count(),
         'canonical_jobs': CanonicalJob.objects.count(),
@@ -284,7 +311,8 @@ def purge_all_ingestion_data(request):
     return Response({
         'success': True,
         'message': 'All ingestion pipeline data purged.',
-        'remaining': counts,
+        'deleted': deleted,
+        'remaining': remaining,
     })
 
 
@@ -536,7 +564,27 @@ def trigger_snapshot(request):
 # Master data / Taxonomy management
 # ---------------------------------------------------------------------------
 
-class MasterCompanyViewSet(viewsets.ModelViewSet):
+class MasterBulkDeleteMixin:
+    """POST /bulk-delete/ with {ids: [...]} for master-data ViewSets."""
+
+    @action(detail=False, methods=['post'], url_path='bulk-delete')
+    def bulk_delete(self, request):
+        ids = request.data.get('ids') or []
+        if not ids:
+            return Response({
+                'success': False,
+                'deleted': 0,
+                'message': 'No IDs provided.',
+            }, status=status.HTTP_400_BAD_REQUEST)
+        deleted, _ = self.get_queryset().model.objects.filter(id__in=ids).delete()
+        return Response({
+            'success': True,
+            'deleted': deleted,
+            'message': f'Deleted {deleted} record(s).',
+        })
+
+
+class MasterCompanyViewSet(MasterBulkDeleteMixin, viewsets.ModelViewSet):
     """CRUD for master companies."""
     permission_classes = [IsAdmin]
     pagination_class = None
@@ -555,7 +603,7 @@ class MasterCompanyViewSet(viewsets.ModelViewSet):
         return MasterCompanySerializer
 
 
-class MasterLocationViewSet(viewsets.ModelViewSet):
+class MasterLocationViewSet(MasterBulkDeleteMixin, viewsets.ModelViewSet):
     """CRUD for master locations."""
     permission_classes = [IsAdmin]
     pagination_class = None
@@ -574,7 +622,7 @@ class MasterLocationViewSet(viewsets.ModelViewSet):
         return MasterLocationSerializer
 
 
-class MasterJobRoleViewSet(viewsets.ModelViewSet):
+class MasterJobRoleViewSet(MasterBulkDeleteMixin, viewsets.ModelViewSet):
     """CRUD for job role taxonomy."""
     permission_classes = [IsAdmin]
     pagination_class = None
@@ -587,7 +635,7 @@ class MasterJobRoleViewSet(viewsets.ModelViewSet):
         return MasterJobRoleSerializer
 
 
-class MasterTechnologyViewSet(viewsets.ModelViewSet):
+class MasterTechnologyViewSet(MasterBulkDeleteMixin, viewsets.ModelViewSet):
     """CRUD for technology taxonomy."""
     permission_classes = [IsAdmin]
     pagination_class = None
@@ -600,7 +648,7 @@ class MasterTechnologyViewSet(viewsets.ModelViewSet):
         return MasterTechnologySerializer
 
 
-class MasterSkillViewSet(viewsets.ModelViewSet):
+class MasterSkillViewSet(MasterBulkDeleteMixin, viewsets.ModelViewSet):
     """CRUD for skill taxonomy."""
     permission_classes = [IsAdmin]
     pagination_class = None

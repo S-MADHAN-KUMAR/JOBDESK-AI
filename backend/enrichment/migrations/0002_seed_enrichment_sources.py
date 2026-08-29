@@ -37,7 +37,7 @@ def seed_enrichment_sources(apps, schema_editor):
         provider_code='apollo',
         defaults={
             'name': 'Apollo',
-            'base_url': 'https://api.apollo.io/v1',
+            'base_url': 'https://api.apollo.io/api/v1',
             'default_params': {
                 'max_results': 25,
                 'titles': 'Recruiter, Talent Acquisition, HR',

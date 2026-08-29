@@ -11,7 +11,7 @@ from cryptography.fernet import Fernet, InvalidToken
 
 
 class EnrichmentSource(models.Model):
-    """SRS Section 7: Configurable contact-enrichment connector (PDL, ContactOut, Apollo)."""
+    """SRS Section 7: Configurable contact-enrichment connector (ContactOut, Apollo)."""
 
     class HealthStatus(models.TextChoices):
         HEALTHY = 'healthy', 'Healthy'
@@ -29,6 +29,11 @@ class EnrichmentSource(models.Model):
     rate_limit_rpm = models.PositiveIntegerField(default=60)
     rate_limit_daily = models.PositiveIntegerField(default=1000)
     current_daily_uses = models.PositiveIntegerField(default=0)
+    credit_usage = models.JSONField(
+        default=dict,
+        blank=True,
+        help_text='Latest provider credit balances (email/phone/search/lead/dial).',
+    )
     health_status = models.CharField(
         max_length=20,
         choices=HealthStatus.choices,
@@ -118,7 +123,7 @@ class Contact(models.Model):
     linkedin_url = models.URLField(max_length=500, null=True, blank=True)
     provider_source = models.CharField(
         max_length=50,
-        help_text="Source provider (pdl, contactout, apollo, lusha)",
+        help_text="Source provider (contactout, apollo)",
     )
     verification_state = models.CharField(
         max_length=20,

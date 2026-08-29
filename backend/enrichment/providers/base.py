@@ -38,3 +38,26 @@ class ContactEnrichmentProvider(ABC):
     @abstractmethod
     def health_check(self) -> bool:
         """Verify API connectivity and key validity."""
+
+    def fetch_credit_usage(self) -> Dict[str, Any]:
+        """Return normalized remaining credits. Override per provider."""
+        return {}
+
+    def persist_credit_usage(self, usage: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+        """Fetch (if needed) and store credit balances on EnrichmentSource."""
+        from django.utils import timezone
+
+        data = usage if usage is not None else self.fetch_credit_usage()
+        if not data:
+            return dict(self.config.credit_usage or {})
+        previous = dict(self.config.credit_usage or {})
+        # Merge so partial meta updates (e.g. email-only) do not wipe phone/search.
+        payload = {
+            **previous,
+            **{k: v for k, v in data.items() if v is not None},
+            'updated_at': timezone.now().isoformat(),
+        }
+        EnrichmentSource = self.config.__class__
+        EnrichmentSource.objects.filter(pk=self.config.pk).update(credit_usage=payload)
+        self.config.credit_usage = payload
+        return payload

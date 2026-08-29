@@ -3,14 +3,10 @@ from enrichment.models import EnrichmentSource
 from .apollo import ApolloProvider
 from .base import ContactEnrichmentProvider, ProviderError
 from .contactout import ContactOutProvider
-from .lusha import LushaProvider
-from .pdl import PeopleDataLabsProvider
 
 ENRICHMENT_PROVIDER_REGISTRY: dict[str, type[ContactEnrichmentProvider]] = {
-    "pdl": PeopleDataLabsProvider,
     "contactout": ContactOutProvider,
     "apollo": ApolloProvider,
-    "lusha": LushaProvider,
 }
 
 
@@ -29,8 +25,6 @@ __all__ = [
     "ContactEnrichmentProvider",
     "ContactOutProvider",
     "ENRICHMENT_PROVIDER_REGISTRY",
-    "LushaProvider",
-    "PeopleDataLabsProvider",
     "ProviderError",
     "get_enrichment_provider",
 ]

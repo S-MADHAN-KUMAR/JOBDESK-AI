@@ -10,6 +10,53 @@ from .base import JobSourceProvider, ProviderError, extract_api_key, strip_html
 
 DEFAULT_ACTOR_ID = "agentx/all-jobs-scraper"
 
+DEFAULT_PLATFORMS = ["LinkedIn", "Indeed", "Naukri.com", "Glassdoor"]
+
+# Values accepted by agentx/all-jobs-scraper `platforms` input.
+SUPPORTED_PLATFORMS = [
+    "LinkedIn",
+    "Indeed",
+    "Naukri.com",
+    "ZipRecruiter",
+    "Jooble",
+    "France Travail",
+    "Bundesagentur für Arbeit",
+    "Glassdoor",
+    "Jobstreet",
+    "Saramin",
+    "doda",
+    "SAP",
+    "JobKorea",
+    "Mynavi Tenshoku",
+    "Pracuj.pl",
+    "HelloWork",
+    "Stepstone",
+    "InfoJobs",
+    "Talent.com",
+    "USAJOBS",
+    "Baitoru",
+    "Kariyer.net",
+    "foundit",
+    "Jobs2Careers",
+    "OnlineJobs.ph",
+    "Catho",
+    "Arbetsförmedlingen",
+    "Glints",
+    "Totaljobs",
+    "OCC",
+    "Freelancer.com",
+    "Jobright",
+    "Job Bank",
+    "jobs.ch",
+    "Bayt.com",
+    "Reed.co.uk",
+    "CV-Library",
+    "VDAB",
+    "Kyujin Box",
+]
+
+_SUPPORTED_SET = frozenset(SUPPORTED_PLATFORMS)
+
 WORK_MODE_KEYWORDS = {
     'remote': ['remote', 'work from home', 'wfh', 'anywhere', 'distributed'],
     'hybrid': ['hybrid', 'flexible', 'flex', 'partial remote'],
@@ -49,6 +96,23 @@ class ApifyProvider(JobSourceProvider):
 
     def _actor_id(self) -> str:
         return str(self.config.default_params.get("actor_id") or DEFAULT_ACTOR_ID)
+
+    def _resolve_platforms(self, filters: Dict[str, Any]) -> List[str]:
+        """Return selected job platforms; Apify-only (ignored by other providers)."""
+        raw = filters.get("platforms")
+        if raw is None or raw == "" or raw == []:
+            raw = self.config.default_params.get("platforms")
+        if isinstance(raw, str):
+            raw = [part.strip() for part in raw.split(",") if part.strip()]
+        if not isinstance(raw, list) or not raw:
+            return list(DEFAULT_PLATFORMS)
+        platforms = [str(p) for p in raw if str(p) in _SUPPORTED_SET]
+        if not platforms:
+            raise ProviderError(
+                "Select at least one valid Apify job platform "
+                f"(e.g. {', '.join(DEFAULT_PLATFORMS)})."
+            )
+        return platforms
 
     def _matches_work_mode(self, title: str, description: str, required: str) -> bool:
         if not required:
@@ -118,6 +182,7 @@ class ApifyProvider(JobSourceProvider):
         work_mode = filters.get("work_mode") or self.config.default_params.get("work_mode", "")
         role = filters.get("role") or self.config.default_params.get("role", "")
         posted_within = filters.get("posted_within") or self.config.default_params.get("posted_within", "")
+        platforms = self._resolve_platforms(filters)
 
         if not keyword:
             raise ProviderError("A search keyword is required.")
@@ -137,7 +202,7 @@ class ApifyProvider(JobSourceProvider):
             "max_results": fetch_count,
             "remote_only": False,
             "job_type": "fulltime",
-            "platforms": ["LinkedIn", "Indeed", "Naukri.com", "Glassdoor"],
+            "platforms": platforms,
         }
         try:
             client = ApifyClient(self._token())
@@ -197,14 +262,142 @@ class ApifyProvider(JobSourceProvider):
             "description": strip_html(item.get("description")),
         }
 
+    @staticmethod
+    def _to_dict(obj: Any) -> Dict[str, Any]:
+        """Normalize Apify client models / dicts to a plain mapping."""
+        if obj is None:
+            return {}
+        if isinstance(obj, dict):
+            return obj
+        if hasattr(obj, "model_dump"):
+            try:
+                return obj.model_dump(mode="python")
+            except TypeError:
+                return obj.model_dump()
+        if hasattr(obj, "dict"):
+            return obj.dict()
+        return {}
+
+    @staticmethod
+    def _pick(mapping: Dict[str, Any], *keys: str) -> Any:
+        for key in keys:
+            if key in mapping and mapping[key] is not None:
+                return mapping[key]
+        return None
+
     def health_check(self) -> bool:
+        """Validate token via GET /users/me/limits (also refreshes credit balances)."""
         try:
-            ApifyClient(self._token()).users().get()
+            self.persist_credit_usage()
             return True
         except ProviderError:
             return False
         except Exception:
             return False
+
+    def fetch_credit_usage(self) -> Dict[str, Any]:
+        """GET /v2/users/me/limits — remaining USD + actor compute units for the cycle.
+
+        Apify Python client returns an AccountLimits pydantic model with snake_case
+        fields (monthly_usage_usd, max_monthly_actor_compute_units, …). Older HTTP
+        responses use camelCase; both shapes are supported.
+        """
+        try:
+            raw = ApifyClient(self._token()).user().limits()
+        except ProviderError:
+            raise
+        except Exception as exc:
+            raise ProviderError(f"Apify limits request failed: {exc}") from exc
+
+        data = self._to_dict(raw)
+        limits = self._to_dict(self._pick(data, "limits") or {})
+        current = self._to_dict(self._pick(data, "current") or {})
+        cycle = self._to_dict(
+            self._pick(data, "monthly_usage_cycle", "monthlyUsageCycle") or {}
+        )
+
+        usd_quota = self._pick(limits, "max_monthly_usage_usd", "maxMonthlyUsageUsd")
+        usd_used = self._pick(current, "monthly_usage_usd", "monthlyUsageUsd")
+        usd_remaining = None
+        if usd_quota is not None and usd_used is not None:
+            try:
+                usd_remaining = round(max(0.0, float(usd_quota) - float(usd_used)), 4)
+            except (TypeError, ValueError):
+                usd_remaining = None
+
+        cu_quota = self._pick(
+            limits,
+            "max_monthly_actor_compute_units",
+            "maxMonthlyActorComputeUnits",
+        )
+        cu_used = self._pick(
+            current,
+            "monthly_actor_compute_units",
+            "monthlyActorComputeUnits",
+        )
+        cu_remaining = None
+        if cu_quota is not None and cu_used is not None:
+            try:
+                cu_remaining = round(max(0.0, float(cu_quota) - float(cu_used)), 4)
+            except (TypeError, ValueError):
+                cu_remaining = None
+
+        proxy_quota = self._pick(limits, "max_monthly_proxy_serps", "maxMonthlyProxySerps")
+        proxy_used = self._pick(current, "monthly_proxy_serps", "monthlyProxySerps")
+        proxy_remaining = None
+        if proxy_quota is not None and proxy_used is not None:
+            try:
+                proxy_remaining = max(0, int(proxy_quota) - int(proxy_used))
+            except (TypeError, ValueError):
+                proxy_remaining = None
+
+        transfer_quota = self._pick(
+            limits,
+            "max_monthly_external_data_transfer_gbytes",
+            "maxMonthlyExternalDataTransferGbytes",
+        )
+        transfer_used = self._pick(
+            current,
+            "monthly_external_data_transfer_gbytes",
+            "monthlyExternalDataTransferGbytes",
+        )
+
+        cycle_start = self._pick(cycle, "start_at", "startAt")
+        cycle_end = self._pick(cycle, "end_at", "endAt")
+        if hasattr(cycle_start, "isoformat"):
+            cycle_start = cycle_start.isoformat()
+        if hasattr(cycle_end, "isoformat"):
+            cycle_end = cycle_end.isoformat()
+
+        return {
+            "provider": "apify",
+            "usd_remaining": usd_remaining,
+            "usd_quota": float(usd_quota) if usd_quota is not None else None,
+            "usd_used": round(float(usd_used), 4) if usd_used is not None else None,
+            "compute_remaining": cu_remaining,
+            "compute_quota": float(cu_quota) if cu_quota is not None else None,
+            "compute_used": round(float(cu_used), 4) if cu_used is not None else None,
+            "actor_count": self._pick(current, "actor_count", "actorCount"),
+            "actor_task_count": self._pick(current, "actor_task_count", "actorTaskCount"),
+            "active_actor_jobs": self._pick(
+                current, "active_actor_job_count", "activeActorJobCount"
+            ),
+            "max_concurrent_actor_jobs": self._pick(
+                limits, "max_concurrent_actor_jobs", "maxConcurrentActorJobs"
+            ),
+            "data_transfer_used_gb": (
+                round(float(transfer_used), 6) if transfer_used is not None else None
+            ),
+            "data_transfer_quota_gb": (
+                float(transfer_quota) if transfer_quota is not None else None
+            ),
+            "cycle_start": cycle_start,
+            "cycle_end": cycle_end,
+            "proxy_serps_remaining": proxy_remaining,
+            "proxy_serps_quota": proxy_quota,
+            "proxy_serps_used": proxy_used,
+        }
+
 
     def get_rate_limit_state(self) -> Dict[str, int]:
         remaining = max(0, self.config.rate_limit_daily - self.config.current_daily_uses)
@@ -218,4 +411,5 @@ class ApifyProvider(JobSourceProvider):
             "rate_limit_rpm": self.config.rate_limit_rpm,
             "health_status": self.config.health_status,
             "last_run_at": self.config.last_run_at,
+            "credit_usage": self.config.credit_usage or {},
         }

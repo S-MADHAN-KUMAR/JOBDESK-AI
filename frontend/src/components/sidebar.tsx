@@ -11,8 +11,6 @@ import {
   ContactRound,
   LayoutDashboard,
   LogOut,
-  Settings,
-  Shield,
   BarChart3,
   Tags,
   UserSearch,
@@ -20,12 +18,13 @@ import {
   TrendingUp,
   Layers,
   Building2,
-  ChevronRight,
+  ChevronDown,
   Database,
   GitBranch,
+  Settings,
 } from "lucide-react"
 import { Button } from "@/components/ui/button"
-import { ROLE_LABELS, type User, logout } from "@/lib/api"
+import { type User, logout } from "@/lib/api"
 import { cn } from "@/lib/utils"
 import { useTheme } from "@/components/theme-provider"
 
@@ -51,6 +50,24 @@ const ALL_ROLES: User["role"][] = [
 ]
 
 const NAV_GROUPS: NavGroup[] = [
+  {
+    label: "Main",
+    items: [
+      { href: "/", label: "Dashboard", icon: LayoutDashboard, roles: ALL_ROLES },
+      {
+        href: "/jobs",
+        label: "Job Explorer",
+        icon: BriefcaseBusiness,
+        roles: ["ADMIN", "MARKET_ANALYST"],
+      },
+      {
+        href: "/enrichment",
+        label: "Enrichment",
+        icon: UserSearch,
+        roles: ["ADMIN", "MARKET_ANALYST"],
+      },
+    ],
+  },
   {
     label: "Administration",
     collapsible: true,
@@ -91,28 +108,27 @@ const NAV_GROUPS: NavGroup[] = [
         icon: ContactRound,
         roles: ["ADMIN"],
       },
+      {
+        href: "/admin/settings",
+        label: "Settings",
+        icon: Settings,
+        roles: ["ADMIN"],
+      },
     ],
   },
   {
-    label: "Main Menu",
+    label: "Account",
     items: [
-      { href: "/", label: "Dashboard", icon: LayoutDashboard, roles: ALL_ROLES },
       {
-        href: "/jobs",
-        label: "Job Explorer",
-        icon: BriefcaseBusiness,
-        roles: ["ADMIN", "MARKET_ANALYST"],
-      },
-      {
-        href: "/enrichment",
-        label: "Enrichment",
-        icon: UserSearch,
-        roles: ["ADMIN", "MARKET_ANALYST"],
+        href: "/settings",
+        label: "Settings",
+        icon: Settings,
+        roles: ALL_ROLES.filter((role) => role !== "ADMIN"),
       },
     ],
   },
   {
-    label: "CEO / Management",
+    label: "Insights",
     items: [
       {
         href: "/ceo",
@@ -120,33 +136,18 @@ const NAV_GROUPS: NavGroup[] = [
         icon: BarChart3,
         roles: ["ADMIN", "CEO_MANAGEMENT"],
       },
-    ],
-  },
-  {
-    label: "Market Analyst",
-    items: [
       {
         href: "/trends",
         label: "Demand Trends",
         icon: TrendingUp,
         roles: ["ADMIN", "MARKET_ANALYST"],
       },
-    ],
-  },
-  {
-    label: "Training Manager",
-    items: [
       {
         href: "/training",
         label: "Skill Intelligence",
         icon: Layers,
         roles: ["ADMIN", "TRAINING_MANAGER"],
       },
-    ],
-  },
-  {
-    label: "Recruitment",
-    items: [
       {
         href: "/recruitment",
         label: "Employer Intelligence",
@@ -157,17 +158,38 @@ const NAV_GROUPS: NavGroup[] = [
   },
 ]
 
-function getInitials(user: User): string {
-  const name = `${user.first_name} ${user.last_name}`.trim()
-  if (name) {
-    return name
-      .split(/\s+/)
-      .map((part) => part[0])
-      .slice(0, 2)
-      .join("")
-      .toUpperCase()
-  }
-  return user.username.slice(0, 2).toUpperCase()
+function isActivePath(pathname: string, href: string) {
+  return pathname === href || (href !== "/" && pathname.startsWith(href))
+}
+
+function NavLink({
+  item,
+  active,
+  onNavigate,
+}: {
+  item: NavItem
+  active: boolean
+  onNavigate?: () => void
+}) {
+  return (
+    <Link
+      href={item.href}
+      onClick={onNavigate}
+      aria-current={active ? "page" : undefined}
+      className={cn(
+        "flex h-10 w-full items-center gap-3 rounded-xl px-3 text-sm font-medium transition-colors",
+        active
+          ? "bg-primary text-primary-foreground shadow-sm"
+          : "text-sidebar-foreground hover:bg-muted hover:text-foreground",
+      )}
+    >
+      <item.icon
+        className={cn("size-4 shrink-0", active ? "opacity-100" : "opacity-80")}
+        strokeWidth={active ? 2.25 : 1.75}
+      />
+      <span className="min-w-0 truncate leading-none">{item.label}</span>
+    </Link>
+  )
 }
 
 function CollapsibleGroup({
@@ -183,75 +205,58 @@ function CollapsibleGroup({
   onNavigate?: () => void
   defaultOpen?: boolean
 }) {
-  const [open, setOpen] = useState(defaultOpen)
   const items = group.items.filter((item) => item.roles.includes(user.role))
-  if (items.length === 0) return null
+  const hasActive = items.some((item) => isActivePath(pathname, item.href))
+  const [open, setOpen] = useState(defaultOpen || hasActive)
 
-  const isActive = (href: string) =>
-    pathname === href || (href !== "/" && pathname.startsWith(href))
-  const hasActive = items.some((item) => isActive(item.href))
-
-  // Auto-open when a child route is active
   useEffect(() => {
     if (hasActive) setOpen(true)
   }, [hasActive])
 
+  if (items.length === 0) return null
+
   return (
-    <div>
+    <div className="flex flex-col gap-1.5">
       <button
-        onClick={() => setOpen(!open)}
+        type="button"
+        onClick={() => setOpen((prev) => !prev)}
         className={cn(
-          "group flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-semibold transition-all duration-200",
+          "flex h-7 w-full items-center gap-2 px-3 text-[11px] font-semibold uppercase tracking-[0.08em] transition-colors",
           hasActive
             ? "text-primary"
-            : "text-muted-foreground hover:text-foreground hover:bg-sidebar-accent",
+            : "text-muted-foreground hover:text-foreground",
         )}
       >
-        <Shield className="size-[18px] shrink-0" />
-        <span className="flex-1 text-left">{group.label}</span>
-        <motion.span
-          animate={{ rotate: open ? 90 : 0 }}
-          transition={{ duration: 0.2, ease: "easeInOut" }}
-        >
-          <ChevronRight className="size-4" />
-        </motion.span>
+        <span className="min-w-0 flex-1 truncate text-left leading-none">
+          {group.label}
+        </span>
+        <ChevronDown
+          className={cn(
+            "size-3.5 shrink-0 transition-transform duration-200",
+            open && "rotate-180",
+          )}
+        />
       </button>
+      <div className="mx-3 border-t border-border/80" />
+
       <AnimatePresence initial={false}>
         {open && (
           <motion.div
             initial={{ height: 0, opacity: 0 }}
             animate={{ height: "auto", opacity: 1 }}
             exit={{ height: 0, opacity: 0 }}
-            transition={{ duration: 0.25, ease: [0.4, 0, 0.2, 1] }}
+            transition={{ duration: 0.2, ease: "easeOut" }}
             className="overflow-hidden"
           >
-            <div className="ml-3 border-l-2 border-sidebar-border pl-3 pt-1 space-y-0.5">
-              {items.map((item) => {
-                const active = isActive(item.href)
-                return (
-                  <Link
-                    key={item.href}
-                    href={item.href}
-                    onClick={onNavigate}
-                    aria-current={active ? "page" : undefined}
-                    className={cn(
-                      "group relative flex h-9 items-center gap-2.5 rounded-lg px-3 text-sm font-medium transition-all duration-200",
-                      active
-                        ? "bg-primary/10 text-primary"
-                        : "text-muted-foreground hover:bg-sidebar-accent hover:text-sidebar-accent-foreground",
-                    )}
-                  >
-                    <item.icon className={cn("size-4 shrink-0", active && "text-primary")} />
-                    {item.label}
-                    {active && (
-                      <motion.span
-                        layoutId="admin-indicator"
-                        className="absolute left-0 top-1/2 -translate-x-[calc(50%+1px)] -translate-y-1/2 h-5 w-[3px] rounded-full bg-primary"
-                      />
-                    )}
-                  </Link>
-                )
-              })}
+            <div className="flex flex-col gap-0.5 pt-1">
+              {items.map((item) => (
+                <NavLink
+                  key={item.href}
+                  item={item}
+                  active={isActivePath(pathname, item.href)}
+                  onNavigate={onNavigate}
+                />
+              ))}
             </div>
           </motion.div>
         )}
@@ -276,17 +281,15 @@ function SidebarNav({
     router.push("/login")
   }
 
-  const isActive = (href: string) =>
-    pathname === href || (href !== "/" && pathname.startsWith(href))
-
-  const logoSrc = theme === "dark" ? "/dark-theme-logo.png" : "/light-theme-logo.png"
+  const logoSrc =
+    theme === "dark" ? "/dark-theme-logo.png" : "/light-theme-logo.png"
 
   return (
-    <div className="flex h-full flex-col bg-card">
+    <div className="flex h-full flex-col bg-sidebar">
       <Link
         href="/"
         onClick={onNavigate}
-        className="flex h-16 shrink-0 items-center gap-2.5 border-b border-sidebar-border px-5"
+        className="flex h-16 shrink-0 items-center px-5"
       >
         <img
           src={logoSrc}
@@ -295,7 +298,7 @@ function SidebarNav({
         />
       </Link>
 
-      <nav className="flex-1 space-y-6 overflow-y-auto px-3 py-5">
+      <nav className="flex flex-1 flex-col gap-5 overflow-y-auto px-3 pb-3 pt-1">
         {NAV_GROUPS.map((group) => {
           if (group.collapsible) {
             return (
@@ -305,70 +308,44 @@ function SidebarNav({
                 user={user}
                 pathname={pathname}
                 onNavigate={onNavigate}
-                defaultOpen={group.items.some((item) => isActive(item.href))}
+                defaultOpen={group.items.some((item) =>
+                  isActivePath(pathname, item.href),
+                )}
               />
             )
           }
 
-          const items = group.items.filter((item) => item.roles.includes(user.role))
+          const items = group.items.filter((item) =>
+            item.roles.includes(user.role),
+          )
           if (items.length === 0) return null
+
           return (
-            <div key={group.label}>
-              <p className="px-3 pb-2 text-xs font-semibold tracking-wider text-muted-foreground uppercase">
+            <div key={group.label} className="flex flex-col gap-1.5">
+              <p className="px-3 text-[11px] font-semibold uppercase tracking-[0.08em] text-muted-foreground">
                 {group.label}
               </p>
-              <div className="space-y-1">
-                {items.map((item) => {
-                  const active = isActive(item.href)
-                  return (
-                    <Link
-                      key={item.href}
-                      href={item.href}
-                      onClick={onNavigate}
-                      aria-current={active ? "page" : undefined}
-                      className={cn(
-                        "group relative flex h-10 items-center gap-3 rounded-xl px-3 text-sm font-medium transition-all duration-200",
-                        active
-                          ? "bg-primary text-primary-foreground shadow-md shadow-primary/20"
-                          : "text-sidebar-foreground hover:bg-sidebar-accent hover:text-sidebar-accent-foreground",
-                      )}
-                    >
-                      <item.icon
-                        className={cn(
-                          "size-[18px] shrink-0 transition-colors",
-                          active && "text-primary-foreground",
-                        )}
-                      />
-                      {item.label}
-                    </Link>
-                  )
-                })}
+              <div className="mx-3 border-t border-border/80" />
+              <div className="flex flex-col gap-0.5 pt-1">
+                {items.map((item) => (
+                  <NavLink
+                    key={item.href}
+                    item={item}
+                    active={isActivePath(pathname, item.href)}
+                    onNavigate={onNavigate}
+                  />
+                ))}
               </div>
             </div>
           )
         })}
       </nav>
 
-      <div className="shrink-0 border-t border-sidebar-border p-3">
-        <motion.div
-          whileHover={{ scale: 1.01 }}
-          className="flex items-center gap-3 rounded-xl px-2 py-2"
-        >
-          <span className="flex size-9 shrink-0 items-center justify-center rounded-full bg-primary/10 text-xs font-bold text-primary">
-            {getInitials(user)}
-          </span>
-          <div className="min-w-0 flex-1">
-            <p className="truncate text-sm font-semibold">
-              {user.first_name || user.username}
-            </p>
-            <p className="truncate text-xs text-muted-foreground">
-              {ROLE_LABELS[user.role]}
-            </p>
-          </div>
-        </motion.div>
+      <div className="flex shrink-0 flex-col gap-2 border-t border-sidebar-border p-3">
         <Button
           variant="ghost"
-          className="mt-1 w-full justify-start gap-2.5 rounded-xl text-muted-foreground hover:bg-sidebar-accent hover:text-sidebar-accent-foreground"
+          size="sm"
+          className="h-9 w-full justify-start gap-3 rounded-xl px-3 text-destructive hover:bg-destructive/10 hover:text-destructive"
           onClick={handleLogout}
         >
           <LogOut className="size-4" />
@@ -390,7 +367,7 @@ export function Sidebar({
 }) {
   return (
     <>
-      <aside className="fixed inset-y-0 left-0 z-40 hidden w-64 border-r border-sidebar-border bg-sidebar shadow-sm lg:block">
+      <aside className="fixed inset-y-0 left-0 z-40 hidden w-64 border-r border-sidebar-border bg-sidebar lg:block">
         <SidebarNav user={user} />
       </aside>
 
@@ -403,7 +380,10 @@ export function Sidebar({
         <Drawer.Portal>
           <Drawer.Backdrop className="fixed inset-0 z-40 bg-black/40 backdrop-blur-sm" />
           <Drawer.Popup className="fixed inset-y-0 left-0 z-50 w-72 max-w-[85vw] bg-sidebar shadow-xl ring-1 ring-sidebar-border">
-            <SidebarNav user={user} onNavigate={() => onDrawerOpenChange(false)} />
+            <SidebarNav
+              user={user}
+              onNavigate={() => onDrawerOpenChange(false)}
+            />
           </Drawer.Popup>
         </Drawer.Portal>
       </Drawer.Root>

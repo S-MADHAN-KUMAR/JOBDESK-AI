@@ -8,6 +8,7 @@ import {
   CheckSquare,
   Clock,
   AlertTriangle,
+  Database,
   Loader2,
   RefreshCw,
   XCircle,
@@ -53,10 +54,16 @@ import {
   TableRow,
 } from "@/components/ui/table"
 import { AppShell } from "@/components/app-shell"
+import { PageHeader } from "@/components/page-header"
+import { toast } from "sonner"
 import {
   type User,
   type JobSource,
   type IngestionRun,
+  APIFY_JOB_PLATFORMS,
+  DEFAULT_APIFY_PLATFORMS,
+  SERPAPI_JOB_PLATFORMS,
+  DEFAULT_SERPAPI_PLATFORMS,
   fetchJobSources,
   fetchIngestionRuns,
   triggerManualRun,
@@ -100,6 +107,38 @@ const STATUS_META: Record<
   },
 }
 
+function platformKey(name: string): string {
+  const slug = name.toLowerCase().replace(/[^a-z0-9]/g, "")
+  for (const suffix of ["couk", "com", "net", "org"]) {
+    if (slug.length > suffix.length + 2 && slug.endsWith(suffix)) {
+      return slug.slice(0, -suffix.length)
+    }
+  }
+  return slug
+}
+
+function splitLegacyPlatforms(platforms: string[]): {
+  apify: string[]
+  serpapi: string[]
+} {
+  const apify: string[] = []
+  const serpapi: string[] = []
+  const apifyByKey = new Map(
+    APIFY_JOB_PLATFORMS.map((name) => [platformKey(name), name]),
+  )
+  const serpByKey = new Map(
+    SERPAPI_JOB_PLATFORMS.map((name) => [platformKey(name), name]),
+  )
+  for (const raw of platforms) {
+    const key = platformKey(raw)
+    const a = apifyByKey.get(key)
+    const s = serpByKey.get(key)
+    if (a && !apify.includes(a)) apify.push(a)
+    if (s && !serpapi.includes(s)) serpapi.push(s)
+  }
+  return { apify, serpapi }
+}
+
 type ScheduleFrequency = "once" | "daily" | "weekly" | "monthly"
 
 type Schedule = {
@@ -115,6 +154,10 @@ type Schedule = {
   work_mode: string
   role: string
   posted_within: string
+  /** @deprecated Prefer apify_platforms / serpapi_platforms. */
+  platforms: string[]
+  apify_platforms?: string[]
+  serpapi_platforms?: string[]
   frequency: ScheduleFrequency
   time: string
   dayOfWeek: number
@@ -129,10 +172,83 @@ type Schedule = {
   nextRun: string
 }
 
+function platformsForSchedule(
+  schedule: Pick<Schedule, "apify_platforms" | "serpapi_platforms" | "platforms">,
+  providerCode: string,
+): string[] {
+  const code = providerCode.trim().toLowerCase()
+  if (code === "apify") {
+    if (schedule.apify_platforms && schedule.apify_platforms.length > 0) {
+      return schedule.apify_platforms
+    }
+  } else if (code === "serpapi") {
+    if (schedule.serpapi_platforms && schedule.serpapi_platforms.length > 0) {
+      return schedule.serpapi_platforms
+    }
+  }
+  return schedule.platforms ?? []
+}
+
+function displayPlatforms(
+  schedule: Pick<Schedule, "apify_platforms" | "serpapi_platforms" | "platforms">,
+): string[] {
+  const merged = [
+    ...(schedule.apify_platforms ?? []),
+    ...(schedule.serpapi_platforms ?? []),
+  ]
+  if (merged.length > 0) {
+    const seen = new Set<string>()
+    const out: string[] = []
+    for (const name of merged) {
+      const key = platformKey(name)
+      if (seen.has(key)) continue
+      seen.add(key)
+      out.push(name)
+    }
+    return out
+  }
+  return schedule.platforms ?? []
+}
+
+function normalizeSchedule(raw: Schedule): Schedule {
+  const hasSplit =
+    (raw.apify_platforms && raw.apify_platforms.length > 0) ||
+    (raw.serpapi_platforms && raw.serpapi_platforms.length > 0)
+  if (hasSplit) {
+    const normalized = {
+      ...raw,
+      apify_platforms: raw.apify_platforms ?? [],
+      serpapi_platforms: raw.serpapi_platforms ?? [],
+    }
+    return {
+      ...normalized,
+      platforms: displayPlatforms(normalized),
+    }
+  }
+  const split = splitLegacyPlatforms(raw.platforms ?? [])
+  return {
+    ...raw,
+    apify_platforms:
+      split.apify.length > 0 ? split.apify : [...DEFAULT_APIFY_PLATFORMS],
+    serpapi_platforms:
+      split.serpapi.length > 0 ? split.serpapi : [...DEFAULT_SERPAPI_PLATFORMS],
+    platforms: raw.platforms ?? [],
+  }
+}
+
 function getSchedules(): Schedule[] {
   if (typeof window === "undefined") return []
   try {
-    return JSON.parse(localStorage.getItem("demandaccel_schedules") || "[]")
+    const parsed = JSON.parse(
+      localStorage.getItem("demandaccel_schedules") || "[]",
+    ) as Schedule[]
+    return parsed
+      .map(normalizeSchedule)
+      .sort((a, b) => {
+        const aTime = Number(a.id) || new Date(a.lastRun || 0).getTime()
+        const bTime = Number(b.id) || new Date(b.lastRun || 0).getTime()
+        return bTime - aTime
+      })
   } catch {
     return []
   }
@@ -154,6 +270,21 @@ function parse12hTime(time12h: string): { hours24: number; minutes: number } {
     if (h !== 12) h += 12
   }
   return { hours24: h, minutes: m }
+}
+
+function toTimeInputValue(time12h: string): string {
+  const { hours24, minutes } = parse12hTime(time12h)
+  return `${String(hours24).padStart(2, "0")}:${String(minutes).padStart(2, "0")}`
+}
+
+function fromTimeInputValue(value: string): string {
+  const [hourStr, minuteStr] = value.split(":")
+  let h = parseInt(hourStr || "9", 10)
+  const m = parseInt(minuteStr || "0", 10)
+  const period = h >= 12 ? "PM" : "AM"
+  h = h % 12
+  if (h === 0) h = 12
+  return `${h}:${String(m).padStart(2, "0")} ${period}`
 }
 
 function calculateNextRun(schedule: Schedule): string {
@@ -195,10 +326,8 @@ function calculateNextRun(schedule: Schedule): string {
   return next.toISOString()
 }
 
-function formatScheduleNext(nextRun: string): string {
-  const next = new Date(nextRun)
-  const now = new Date()
-  const diffMs = next.getTime() - now.getTime()
+function formatScheduleNext(nextRun: string, nowMs = Date.now()): string {
+  const diffMs = new Date(nextRun).getTime() - nowMs
   if (diffMs < 0) return "Overdue"
   const mins = Math.floor(diffMs / 60_000)
   if (mins < 60) return `in ${mins}m`
@@ -208,7 +337,59 @@ function formatScheduleNext(nextRun: string): string {
   return `in ${days}d ${hours % 24}h`
 }
 
+function getCountdownParts(nextRun: string, nowMs: number) {
+  const diffMs = new Date(nextRun).getTime() - nowMs
+  if (diffMs <= 0) {
+    return { h: 0, m: 0, s: 0, totalMs: diffMs, overdue: true }
+  }
+  const totalSec = Math.floor(diffMs / 1000)
+  return {
+    h: Math.floor(totalSec / 3600),
+    m: Math.floor((totalSec % 3600) / 60),
+    s: totalSec % 60,
+    totalMs: diffMs,
+    overdue: false,
+  }
+}
+
+function formatCountdownClock(parts: { h: number; m: number; s: number }): string {
+  const pad = (n: number) => String(n).padStart(2, "0")
+  if (parts.h >= 24) {
+    const days = Math.floor(parts.h / 24)
+    const hours = parts.h % 24
+    return `${days}d ${pad(hours)}:${pad(parts.m)}:${pad(parts.s)}`
+  }
+  return `${pad(parts.h)}:${pad(parts.m)}:${pad(parts.s)}`
+}
+
+function formatAbsoluteNext(nextRun: string): string {
+  const next = new Date(nextRun)
+  return next.toLocaleString(undefined, {
+    weekday: "short",
+    month: "short",
+    day: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+  })
+}
+
+function frequencyLabel(schedule: Schedule): string {
+  if (schedule.frequency === "once") return "One-time"
+  if (schedule.frequency === "daily") return `Daily · ${schedule.time}`
+  if (schedule.frequency === "weekly") {
+    return `Weekly · ${DAYS[schedule.dayOfWeek]} · ${schedule.time}`
+  }
+  return `Monthly · day ${schedule.dayOfMonth} · ${schedule.time}`
+}
+
 const DAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"]
+
+const FREQUENCY_BADGE: Record<ScheduleFrequency, string> = {
+  once: "border-transparent bg-slate-500/10 text-slate-700 dark:text-slate-300",
+  daily: "border-transparent bg-emerald-500/10 text-emerald-700 dark:text-emerald-400",
+  weekly: "border-transparent bg-sky-500/10 text-sky-700 dark:text-sky-400",
+  monthly: "border-transparent bg-amber-500/10 text-amber-700 dark:text-amber-400",
+}
 
 function formatDuration(started: string | null, ended: string | null): string {
   if (!started) return "—"
@@ -231,8 +412,9 @@ export default function AdminIngestionPage() {
   const [runsPageSize] = useState(25)
   const [runsTotalPages, setRunsTotalPages] = useState(1)
   const [sources, setSources] = useState<JobSource[]>([])
+  const hasApify = sources.some((s) => s.provider_code === "apify")
+  const hasSerpapi = sources.some((s) => s.provider_code === "serpapi")
   const [loading, setLoading] = useState(true)
-  const [error, setError] = useState<string | null>(null)
   const [reloadKey, setReloadKey] = useState(0)
 
   const [statusFilter, setStatusFilter] = useState<string>("all")
@@ -267,11 +449,11 @@ export default function AdminIngestionPage() {
   })
   const [savingProfile, setSavingProfile] = useState(false)
   const [savingPassword, setSavingPassword] = useState(false)
-  const [profileSuccess, setProfileSuccess] = useState("")
-  const [passwordSuccess, setPasswordSuccess] = useState("")
 
   const [schedules, setSchedules] = useState<Schedule[]>([])
-  const [countdown, setCountdown] = useState({ h: 0, m: 0, s: 0, label: "" })
+  const [schedulesPage, setSchedulesPage] = useState(1)
+  const schedulesPageSize = 10
+  const [nowMs, setNowMs] = useState(() => Date.now())
   const [scheduleOpen, setScheduleOpen] = useState(false)
   const [scheduleForm, setScheduleForm] = useState<Partial<Schedule>>({
     frequency: "daily",
@@ -292,6 +474,9 @@ export default function AdminIngestionPage() {
     work_mode: "",
     role: "",
     posted_within: "",
+    platforms: [...DEFAULT_APIFY_PLATFORMS],
+    apify_platforms: [...DEFAULT_APIFY_PLATFORMS],
+    serpapi_platforms: [...DEFAULT_SERPAPI_PLATFORMS],
   })
 
   const refresh = useCallback(() => {
@@ -303,43 +488,40 @@ export default function AdminIngestionPage() {
   }, [])
 
   useEffect(() => {
-    function tick() {
-      const now = new Date()
-      const enabled = schedules.filter(
-        (s) => s.enabled && (s.totalRuns === 0 || s.runsCompleted < s.totalRuns),
-      )
-      if (enabled.length === 0) {
-        setCountdown({ h: 0, m: 0, s: 0, label: "No active schedules" })
-        return
-      }
-      let nearest: Date | null = null
-      let nearestLabel = ""
-      for (const s of enabled) {
-        const next = new Date(s.nextRun)
-        if (!nearest || next < nearest) {
-          nearest = next
-          nearestLabel = "All enabled providers"
-        }
-      }
-      if (!nearest) {
-        setCountdown({ h: 0, m: 0, s: 0, label: "No active schedules" })
-        return
-      }
-      const diffMs = nearest.getTime() - now.getTime()
-      if (diffMs <= 0) {
-        setCountdown({ h: 0, m: 0, s: 0, label: `Running: ${nearestLabel}...` })
-        return
-      }
-      const totalSec = Math.floor(diffMs / 1000)
-      const h = Math.floor(totalSec / 3600)
-      const m = Math.floor((totalSec % 3600) / 60)
-      const s = totalSec % 60
-      setCountdown({ h, m, s, label: nearestLabel })
-    }
-    tick()
-    const id = setInterval(tick, 1000)
+    const id = setInterval(() => setNowMs(Date.now()), 1000)
     return () => clearInterval(id)
-  }, [schedules, sources])
+  }, [])
+
+  const activeSchedules = schedules.filter(
+    (s) => s.enabled && (s.totalRuns === 0 || s.runsCompleted < s.totalRuns),
+  )
+  const nextUpcoming = activeSchedules
+    .slice()
+    .sort((a, b) => new Date(a.nextRun).getTime() - new Date(b.nextRun).getTime())[0]
+  const nextUpcomingParts = nextUpcoming
+    ? getCountdownParts(nextUpcoming.nextRun, nowMs)
+    : null
+
+  const schedulesNewestFirst = [...schedules].sort((a, b) => {
+    const aTime = Number(a.id) || new Date(a.lastRun || 0).getTime()
+    const bTime = Number(b.id) || new Date(b.lastRun || 0).getTime()
+    return bTime - aTime
+  })
+  const schedulesTotalPages = Math.max(
+    1,
+    Math.ceil(schedulesNewestFirst.length / schedulesPageSize),
+  )
+  const safeSchedulesPage = Math.min(schedulesPage, schedulesTotalPages)
+  const pageSchedules = schedulesNewestFirst.slice(
+    (safeSchedulesPage - 1) * schedulesPageSize,
+    safeSchedulesPage * schedulesPageSize,
+  )
+
+  useEffect(() => {
+    if (schedulesPage > schedulesTotalPages) {
+      setSchedulesPage(schedulesTotalPages)
+    }
+  }, [schedulesPage, schedulesTotalPages])
 
   useEffect(() => {
     if (profileError) {
@@ -355,7 +537,7 @@ export default function AdminIngestionPage() {
     async function run() {
       try {
         if (!me || me.role !== "ADMIN") {
-          setError("Access denied: Admin role required.")
+          toast.error("Access denied: Admin role required.")
           return
         }
         const [runsPageData, sourcesList] = await Promise.all([
@@ -374,7 +556,7 @@ export default function AdminIngestionPage() {
         setSources(sourcesList)
       } catch (err) {
         if (cancelled) return
-        setError(err instanceof Error ? err.message : "Failed to load ingestion data")
+        toast.error(err instanceof Error ? err.message : "Failed to load ingestion data")
       } finally {
         if (!cancelled) setLoading(false)
       }
@@ -407,8 +589,7 @@ export default function AdminIngestionPage() {
           const newCompleted = s.runsCompleted + 1
           const shouldDisable = s.totalRuns > 0 && newCompleted >= s.totalRuns
 
-          triggerManualRun({
-            source_id: s.source_id,
+          const basePayload = {
             keyword: s.keyword.trim() || undefined,
             location: s.location.trim() || undefined,
             country: s.country.trim() || undefined,
@@ -419,7 +600,38 @@ export default function AdminIngestionPage() {
             work_mode: s.work_mode || undefined,
             role: s.role.trim() || undefined,
             posted_within: s.posted_within || undefined,
-          })
+          }
+
+          const runPromise =
+            s.source_id === "all"
+              ? fetchJobSources().then((list) =>
+                  Promise.all(
+                    list
+                      .filter((src) => src.is_active)
+                      .map((src) => {
+                        const boards = platformsForSchedule(s, src.provider_code)
+                        return triggerManualRun({
+                          ...basePayload,
+                          source_id: src.id,
+                          platforms: boards.length > 0 ? boards : undefined,
+                        })
+                      }),
+                  ),
+                )
+              : triggerManualRun({
+                  ...basePayload,
+                  source_id: s.source_id,
+                  platforms: (() => {
+                    const src = sources.find((x) => x.id === s.source_id)
+                    const boards = platformsForSchedule(
+                      s,
+                      src?.provider_code || "",
+                    )
+                    return boards.length > 0 ? boards : undefined
+                  })(),
+                })
+
+          runPromise
             .then(() => {
               const fresh = getSchedules()
               const idx = fresh.findIndex((x) => x.id === s.id)
@@ -471,6 +683,19 @@ export default function AdminIngestionPage() {
   }, [refresh])
 
   function saveSchedule() {
+    const apify_platforms =
+      scheduleForm.apify_platforms && scheduleForm.apify_platforms.length > 0
+        ? scheduleForm.apify_platforms
+        : [...DEFAULT_APIFY_PLATFORMS]
+    const serpapi_platforms =
+      scheduleForm.serpapi_platforms && scheduleForm.serpapi_platforms.length > 0
+        ? scheduleForm.serpapi_platforms
+        : [...DEFAULT_SERPAPI_PLATFORMS]
+    const platforms = displayPlatforms({
+      platforms: [],
+      apify_platforms,
+      serpapi_platforms,
+    })
     const newSchedule: Schedule = {
       id: Date.now().toString(),
       source_id: "all",
@@ -484,6 +709,9 @@ export default function AdminIngestionPage() {
       work_mode: scheduleForm.work_mode || "",
       role: scheduleForm.role || "",
       posted_within: scheduleForm.posted_within || "",
+      platforms,
+      apify_platforms,
+      serpapi_platforms,
       frequency: scheduleForm.frequency || "daily",
       time: scheduleForm.time || "9:00 AM",
       dayOfWeek: scheduleForm.dayOfWeek ?? 1,
@@ -498,9 +726,10 @@ export default function AdminIngestionPage() {
       nextRun: "",
     }
     newSchedule.nextRun = calculateNextRun(newSchedule)
-    const updated = [...schedules, newSchedule]
+    const updated = [newSchedule, ...schedules]
     saveSchedules(updated)
     setSchedules(updated)
+    setSchedulesPage(1)
     setScheduleOpen(false)
   }
 
@@ -547,14 +776,14 @@ export default function AdminIngestionPage() {
 
   async function confirmDeleteRuns() {
     setDeleting(true)
-    setError(null)
     try {
       await bulkDeleteIngestionRuns(Array.from(selectedRuns))
       setSelectedRuns(new Set())
       setDeleteConfirmOpen(false)
       refresh()
+      toast.success("Runs deleted successfully.")
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to delete runs")
+      toast.error(err instanceof Error ? err.message : "Failed to delete runs")
     } finally {
       setDeleting(false)
     }
@@ -567,21 +796,17 @@ export default function AdminIngestionPage() {
       email: me?.email || "",
     })
     setPasswordForm({ current_password: "", new_password: "", confirm_password: "" })
-    setProfileSuccess("")
-    setPasswordSuccess("")
     setProfileOpen(true)
   }
 
   async function saveProfile() {
     setSavingProfile(true)
-    setProfileSuccess("")
-    setError(null)
     try {
       await updateProfile(profileForm)
-      setProfileSuccess("Profile updated successfully")
+      toast.success("Profile updated successfully.")
       refresh()
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to update profile")
+      toast.error(err instanceof Error ? err.message : "Failed to update profile")
     } finally {
       setSavingProfile(false)
     }
@@ -589,27 +814,29 @@ export default function AdminIngestionPage() {
 
   async function savePassword() {
     if (passwordForm.new_password !== passwordForm.confirm_password) {
-      setError("New passwords do not match")
+      toast.error("New passwords do not match")
       return
     }
     setSavingPassword(true)
-    setPasswordSuccess("")
-    setError(null)
     try {
       await changePassword({
         current_password: passwordForm.current_password,
         new_password: passwordForm.new_password,
       })
-      setPasswordSuccess("Password changed successfully")
+      toast.success("Password changed successfully.")
       setPasswordForm({ current_password: "", new_password: "", confirm_password: "" })
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to change password")
+      toast.error(err instanceof Error ? err.message : "Failed to change password")
     } finally {
       setSavingPassword(false)
     }
   }
 
-  const filteredRuns = runs
+  const filteredRuns = [...runs].sort((a, b) => {
+    const aTime = new Date(a.started_at || a.created_at).getTime()
+    const bTime = new Date(b.started_at || b.created_at).getTime()
+    return bTime - aTime
+  })
 
   if (!me) return null
 
@@ -627,159 +854,360 @@ export default function AdminIngestionPage() {
 
   return (
     <AppShell user={me} loading={loading}>
-      <div className="p-4 sm:p-6 space-y-6">
-        <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
-          <div>
-            <h1 className="text-2xl font-bold tracking-tight text-foreground">
-              Ingestion Runs
-            </h1>
-            <p className="text-sm text-muted-foreground">
-              Monitor ingestion pipeline runs and manage schedules
-            </p>
-          </div>
-          <div className="flex items-center gap-2">
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={openProfile}
-              data-icon="inline-start"
-            >
-              <Pencil data-icon="inline-start" />
-              Edit Profile
-            </Button>
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={() => setAutoRefresh((v) => !v)}
-              data-icon="inline-start"
-            >
-              <RefreshCw
-                className={cn("size-4", autoRefresh && "animate-spin")}
-                data-icon="inline-start"
-              />
-              {autoRefresh ? "Auto-refresh on" : "Auto-refresh off"}
-            </Button>
-            {selectedRuns.size > 0 && (
+      <div className="space-y-6 p-4 sm:p-6">
+        <PageHeader
+          variant="banner"
+          icon={Database}
+          title="Ingestion Runs"
+          description="Monitor pipeline runs, manage schedules, and keep provider ingestion on track."
+          actions={
+            <>
               <Button
-                variant="destructive"
+                variant="outline"
                 size="sm"
-                onClick={() => setDeleteConfirmOpen(true)}
+                onClick={() => router.push("/admin/settings")}
                 data-icon="inline-start"
+                className="border-white/40 bg-transparent text-white hover:bg-white/10 hover:text-white"
               >
-                <Trash2 data-icon="inline-start" />
-                Delete ({selectedRuns.size})
+                <Pencil data-icon="inline-start" />
+                Settings
               </Button>
-            )}
-          </div>
-        </div>
-
-        {error && (
-          <div className="rounded-lg border border-destructive/30 bg-destructive/5 px-4 py-3 text-sm text-destructive">
-            {error}
-          </div>
-        )}
+              <Button
+                variant={autoRefresh ? "secondary" : "outline"}
+                size="sm"
+                onClick={() => setAutoRefresh((v) => !v)}
+                data-icon="inline-start"
+                className={
+                  autoRefresh
+                    ? undefined
+                    : "border-white/40 bg-transparent text-white hover:bg-white/10 hover:text-white"
+                }
+              >
+                <RefreshCw
+                  className={cn("size-4", autoRefresh && "animate-spin")}
+                  data-icon="inline-start"
+                />
+                {autoRefresh ? "Auto-refresh on" : "Auto-refresh off"}
+              </Button>
+              {selectedRuns.size > 0 && (
+                <Button
+                  variant="destructive"
+                  size="sm"
+                  onClick={() => setDeleteConfirmOpen(true)}
+                  data-icon="inline-start"
+                >
+                  <Trash2 data-icon="inline-start" />
+                  Delete ({selectedRuns.size})
+                </Button>
+              )}
+            </>
+          }
+        />
 
         <Card>
-            <CardHeader className="flex-row items-center justify-between space-y-0">
+          <CardHeader className="flex-col gap-4 space-y-0 border-b sm:flex-row sm:items-start sm:justify-between">
+            <div className="space-y-1">
               <CardTitle className="flex items-center gap-2">
                 <Timer className="size-4" />
-                Scheduled Runs {schedules.length > 0 && `(${schedules.length})`}
+                Ingestion schedules
               </CardTitle>
-              <div className="flex items-center gap-4">
-                <div className="flex items-center gap-2 rounded-lg border bg-muted/50 px-3 py-1.5 font-mono text-sm">
-                  <span className="text-lg font-bold tabular-nums">
-                    {String(countdown.h).padStart(2, "0")}:{String(countdown.m).padStart(2, "0")}:{String(countdown.s).padStart(2, "0")}
-                  </span>
-                  <span className="text-xs text-muted-foreground max-w-[120px] truncate">
-                    {countdown.label}
-                  </span>
+              <p className="text-sm text-muted-foreground">
+                {activeSchedules.length > 0
+                  ? `${activeSchedules.length} active · ${schedules.length} total`
+                  : schedules.length > 0
+                    ? "All schedules paused"
+                    : "Automate provider ingestion on a recurring schedule"}
+              </p>
+            </div>
+            <Button
+              size="sm"
+              onClick={() => setScheduleOpen(true)}
+              data-icon="inline-start"
+            >
+              <Plus data-icon="inline-start" />
+              Add schedule
+            </Button>
+          </CardHeader>
+
+          {nextUpcoming && nextUpcomingParts ? (
+            <div className="border-b bg-muted/20 px-4 py-4 sm:px-5">
+              <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                <div className="min-w-0 space-y-1.5">
+                  <p className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
+                    Next run
+                  </p>
+                  <p className="truncate text-base font-semibold tracking-tight">
+                    {nextUpcoming.keyword || "All matching jobs"}
+                  </p>
+                  <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
+                    <Badge
+                      variant="outline"
+                      className={FREQUENCY_BADGE[nextUpcoming.frequency]}
+                    >
+                      {nextUpcoming.frequency === "once"
+                        ? "One-time"
+                        : nextUpcoming.frequency.charAt(0).toUpperCase() +
+                          nextUpcoming.frequency.slice(1)}
+                    </Badge>
+                    <span>{frequencyLabel(nextUpcoming)}</span>
+                    {nextUpcoming.location ? (
+                      <span>· {nextUpcoming.location}</span>
+                    ) : null}
+                  </div>
+                </div>
+                <div
+                  className={cn(
+                    "rounded-xl border px-4 py-3 text-center sm:min-w-[160px]",
+                    nextUpcomingParts.overdue
+                      ? "border-amber-500/30 bg-amber-500/5"
+                      : nextUpcomingParts.totalMs < 60_000
+                        ? "border-emerald-500/30 bg-emerald-500/5"
+                        : "bg-background",
+                  )}
+                >
+                  <p className="text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
+                    {nextUpcomingParts.overdue ? "Due now" : "Starts in"}
+                  </p>
+                  <p
+                    className={cn(
+                      "mt-1 font-mono text-2xl font-semibold tabular-nums tracking-tight",
+                      nextUpcomingParts.overdue
+                        ? "text-amber-600 dark:text-amber-400"
+                        : nextUpcomingParts.totalMs < 60_000
+                          ? "text-emerald-700 dark:text-emerald-400"
+                          : "text-foreground",
+                    )}
+                  >
+                    {nextUpcomingParts.overdue
+                      ? "00:00:00"
+                      : formatCountdownClock(nextUpcomingParts)}
+                  </p>
+                  <p className="mt-1 text-[11px] text-muted-foreground">
+                    {formatAbsoluteNext(nextUpcoming.nextRun)}
+                  </p>
+                </div>
+              </div>
+            </div>
+          ) : null}
+
+          <CardContent className="p-4 sm:p-5">
+            {schedules.length === 0 ? (
+              <div className="flex flex-col items-center justify-center gap-3 rounded-xl border border-dashed px-4 py-12 text-center">
+                <span className="flex size-12 items-center justify-center rounded-full bg-muted text-muted-foreground">
+                  <Calendar className="size-6" />
+                </span>
+                <div>
+                  <p className="font-medium">No schedules yet</p>
+                  <p className="text-sm text-muted-foreground">
+                    Create a schedule to run ingestion automatically.
+                  </p>
                 </div>
                 <Button
                   variant="outline"
-                  size="sm"
                   onClick={() => setScheduleOpen(true)}
                   data-icon="inline-start"
                 >
                   <Plus data-icon="inline-start" />
-                  Add schedule
+                  Create schedule
                 </Button>
               </div>
-            </CardHeader>
-            <CardContent>
-              {schedules.length === 0 ? (
-                <p className="text-sm text-muted-foreground py-4 text-center">
-                  No schedules yet. Add a schedule to automate ingestion runs.
-                </p>
-              ) : (
+            ) : (
               <div className="space-y-3">
-                {schedules.map((s) => {
-                  const source = sources.find((src) => src.id === s.source_id)
-                  return (
-                    <div
-                      key={s.id}
-                      className={cn(
-                        "flex items-center justify-between rounded-xl border p-3 transition-all",
-                        !s.enabled && "opacity-50",
-                      )}
-                    >
-                      <div className="flex items-center gap-3">
-                        <button
-                          onClick={() => toggleSchedule(s.id)}
-                          className={cn(
-                            "size-5 rounded-full border-2 flex items-center justify-center transition-colors",
-                            s.enabled
-                              ? "border-primary bg-primary text-white"
-                              : "border-muted-foreground/30",
-                          )}
-                        >
-                          {s.enabled && <CheckCircle2 className="size-3" />}
-                        </button>
-                        <div>
-                          <p className="text-sm font-medium">
-                            All enabled providers — {s.keyword || "All jobs"}
-                          </p>
-                          <p className="text-xs text-muted-foreground">
+                <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5">
+                  {pageSchedules.map((s) => {
+                    const parts = getCountdownParts(s.nextRun, nowMs)
+                    const exhausted =
+                      s.totalRuns > 0 && s.runsCompleted >= s.totalRuns
+                    const isLive = s.enabled && !exhausted
+                    const platforms = displayPlatforms(s)
+                    const shownPlatforms = platforms.slice(0, 2)
+                    const extraPlatforms = Math.max(
+                      0,
+                      platforms.length - shownPlatforms.length,
+                    )
+
+                    return (
+                      <div
+                        key={s.id}
+                        className={cn(
+                          "flex flex-col rounded-lg border p-2.5",
+                          isLive ? "bg-background" : "bg-muted/20 opacity-90",
+                        )}
+                      >
+                        <div className="flex flex-wrap items-center gap-1">
+                          <Badge
+                            variant="outline"
+                            className={cn(
+                              "h-5 px-1.5 text-[10px]",
+                              FREQUENCY_BADGE[s.frequency],
+                            )}
+                          >
                             {s.frequency === "once"
                               ? "One-time"
-                              : s.frequency === "daily"
-                                ? `Daily at ${s.time}`
-                                : s.frequency === "weekly"
-                                  ? `Weekly on ${DAYS[s.dayOfWeek]} at ${s.time}`
-                                  : `Monthly on ${s.dayOfMonth} at ${s.time}`}
-                            {s.totalRuns > 0 && ` · ${s.runsCompleted}/${s.totalRuns} runs`}
-                          </p>
-                          {s.lastError && (
-                            <p className="mt-1 text-xs text-red-600 dark:text-red-400">
-                              Last run failed: {s.lastError}
-                            </p>
-                          )}
-                          {s.lastRunStatus === "success" && s.lastRun && (
-                            <p className="mt-1 text-xs text-emerald-600 dark:text-emerald-400">
-                              Last run succeeded
-                            </p>
+                              : s.frequency.charAt(0).toUpperCase() +
+                                s.frequency.slice(1)}
+                          </Badge>
+                          <Badge
+                            variant="outline"
+                            className={cn(
+                              "h-5 px-1.5 text-[10px]",
+                              isLive
+                                ? "border-transparent bg-emerald-500/10 text-emerald-700 dark:text-emerald-400"
+                                : exhausted
+                                  ? "border-transparent bg-muted text-muted-foreground"
+                                  : "border-transparent bg-amber-500/10 text-amber-700 dark:text-amber-400",
+                            )}
+                          >
+                            {isLive
+                              ? "Active"
+                              : exhausted
+                                ? "Done"
+                                : "Paused"}
+                          </Badge>
+                          {s.lastRunStatus === "error" && (
+                            <Badge
+                              variant="destructive"
+                              className="h-5 px-1.5 text-[10px]"
+                            >
+                              Failed
+                            </Badge>
                           )}
                         </div>
-                      </div>
-                      <div className="flex items-center gap-3">
-                        <span className="text-xs text-muted-foreground">
-                          {s.enabled ? `Next: ${formatScheduleNext(s.nextRun)}` : "Paused"}
-                        </span>
-                        <Button
-                          variant="ghost"
-                          size="icon-sm"
-                          onClick={() => deleteSchedule(s.id)}
-                          className="text-muted-foreground hover:text-destructive"
+
+                        <div className="mt-2 min-w-0">
+                          <p className="truncate text-sm font-semibold tracking-tight">
+                            {s.keyword || "All matching jobs"}
+                          </p>
+                          <p className="mt-0.5 truncate text-[11px] text-muted-foreground">
+                            {frequencyLabel(s)}
+                            {s.location ? ` · ${s.location}` : ""}
+                            {s.country ? `, ${s.country}` : ""}
+                          </p>
+                        </div>
+
+                        <p className="mt-1.5 truncate text-[11px] text-muted-foreground">
+                          {s.totalRuns > 0
+                            ? `Runs ${s.runsCompleted}/${s.totalRuns}`
+                            : "Unlimited"}
+                          {!isLive && exhausted ? " · Finished" : ""}
+                        </p>
+
+                        {shownPlatforms.length > 0 && (
+                          <div className="mt-1.5 flex flex-wrap gap-1">
+                            {shownPlatforms.map((platform) => (
+                              <Badge
+                                key={platform}
+                                variant="secondary"
+                                className="h-5 px-1.5 text-[10px] font-normal"
+                              >
+                                {platform}
+                              </Badge>
+                            ))}
+                            {extraPlatforms > 0 && (
+                              <Badge
+                                variant="outline"
+                                className="h-5 px-1.5 text-[10px] font-normal"
+                              >
+                                +{extraPlatforms}
+                              </Badge>
+                            )}
+                          </div>
+                        )}
+
+                        <div
+                          className={cn(
+                            "mt-2 rounded-md border px-2 py-1.5 text-center",
+                            !isLive
+                              ? "bg-muted/40"
+                              : parts.overdue
+                                ? "border-amber-500/30 bg-amber-500/5"
+                                : parts.totalMs < 60_000
+                                  ? "border-emerald-500/30 bg-emerald-500/5"
+                                  : "bg-muted/30",
+                          )}
                         >
-                          <X className="size-4" />
-                        </Button>
+                          <p
+                            className={cn(
+                              "font-mono text-sm font-semibold tabular-nums tracking-tight",
+                              !isLive && "text-muted-foreground",
+                              isLive &&
+                                parts.overdue &&
+                                "text-amber-600 dark:text-amber-400",
+                              isLive &&
+                                !parts.overdue &&
+                                parts.totalMs < 60_000 &&
+                                "text-emerald-700 dark:text-emerald-400",
+                            )}
+                          >
+                            {!isLive
+                              ? "--:--:--"
+                              : parts.overdue
+                                ? "00:00:00"
+                                : formatCountdownClock(parts)}
+                          </p>
+                        </div>
+
+                        <div className="mt-auto flex items-center justify-end gap-1 pt-2">
+                          <Button
+                            variant="outline"
+                            size="xs"
+                            onClick={() => toggleSchedule(s.id)}
+                            disabled={exhausted}
+                            className="h-7 px-2 text-[11px]"
+                          >
+                            {s.enabled ? "Pause" : "Resume"}
+                          </Button>
+                          <Button
+                            variant="ghost"
+                            size="icon-sm"
+                            onClick={() => deleteSchedule(s.id)}
+                            className="size-7 text-muted-foreground hover:text-destructive"
+                            title="Delete schedule"
+                          >
+                            <Trash2 className="size-3.5" />
+                          </Button>
+                        </div>
                       </div>
+                    )
+                  })}
+                </div>
+
+                {schedulesTotalPages > 1 && (
+                  <div className="flex items-center justify-between gap-3 border-t pt-4">
+                    <p className="text-sm text-muted-foreground">
+                      Page {safeSchedulesPage} of {schedulesTotalPages} (
+                      {schedulesNewestFirst.length} schedules)
+                    </p>
+                    <div className="flex gap-2">
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        disabled={safeSchedulesPage <= 1}
+                        onClick={() =>
+                          setSchedulesPage((p) => Math.max(1, p - 1))
+                        }
+                      >
+                        Previous
+                      </Button>
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        disabled={safeSchedulesPage >= schedulesTotalPages}
+                        onClick={() =>
+                          setSchedulesPage((p) =>
+                            Math.min(schedulesTotalPages, p + 1),
+                          )
+                        }
+                      >
+                        Next
+                      </Button>
                     </div>
-                  )
-                })}
+                  </div>
+                )}
               </div>
-              )}
-            </CardContent>
-          </Card>
+            )}
+          </CardContent>
+        </Card>
 
         <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
           <div className="relative flex-1">
@@ -957,14 +1385,14 @@ export default function AdminIngestionPage() {
       </div>
 
       <Dialog open={scheduleOpen} onOpenChange={setScheduleOpen}>
-        <DialogContent className="sm:max-w-lg">
+        <DialogContent className="max-h-[90vh] w-[calc(100%-2rem)] max-w-[calc(100%-2rem)] overflow-hidden sm:max-w-3xl lg:max-w-5xl">
           <DialogHeader>
             <DialogTitle>Create ingestion schedule</DialogTitle>
             <DialogDescription>
               Set up recurring ingestion runs with custom frequency and timing.
             </DialogDescription>
           </DialogHeader>
-          <div className="flex flex-col gap-4 py-4">
+          <div className="flex max-h-[min(72vh,40rem)] flex-col gap-4 overflow-y-auto py-4 pr-1">
             <div className="flex flex-col gap-2">
               <Label>Keyword</Label>
               <Input
@@ -976,7 +1404,7 @@ export default function AdminIngestionPage() {
               />
             </div>
 
-            <div className="grid grid-cols-2 gap-3">
+            <div className="grid gap-3 sm:grid-cols-2">
               <div className="flex flex-col gap-2">
                 <Label>Location</Label>
                 <Input
@@ -999,7 +1427,163 @@ export default function AdminIngestionPage() {
               </div>
             </div>
 
-            <div className="grid grid-cols-2 gap-3">
+            <div className="grid gap-4 md:grid-cols-2">
+            {hasApify && (
+              <div className="flex flex-col gap-2">
+                <div className="flex items-center justify-between gap-2">
+                  <Label>Apify job platforms</Label>
+                  <div className="flex gap-1">
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="sm"
+                      onClick={() =>
+                        setScheduleForm({
+                          ...scheduleForm,
+                          apify_platforms: [...APIFY_JOB_PLATFORMS],
+                        })
+                      }
+                    >
+                      Select all
+                    </Button>
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="sm"
+                      onClick={() =>
+                        setScheduleForm({
+                          ...scheduleForm,
+                          apify_platforms: [...DEFAULT_APIFY_PLATFORMS],
+                        })
+                      }
+                    >
+                      Defaults
+                    </Button>
+                  </div>
+                </div>
+                <p className="text-xs text-muted-foreground">
+                  Applied only when Apify runs.
+                </p>
+                <div className="max-h-36 overflow-y-auto rounded-lg border p-3">
+                  <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+                    {APIFY_JOB_PLATFORMS.map((platform) => {
+                      const selected = scheduleForm.apify_platforms ?? []
+                      const checked = selected.some(
+                        (p) => platformKey(p) === platformKey(platform),
+                      )
+                      return (
+                        <label
+                          key={platform}
+                          className="flex cursor-pointer items-center gap-2 text-sm"
+                        >
+                          <input
+                            type="checkbox"
+                            checked={checked}
+                            onChange={() => {
+                              const next = checked
+                                ? selected.filter(
+                                    (p) =>
+                                      platformKey(p) !== platformKey(platform),
+                                  )
+                                : [...selected, platform]
+                              setScheduleForm({
+                                ...scheduleForm,
+                                apify_platforms: next,
+                              })
+                            }}
+                            className="size-4 accent-primary"
+                          />
+                          {platform}
+                        </label>
+                      )
+                    })}
+                  </div>
+                </div>
+                <p className="text-xs text-muted-foreground">
+                  {(scheduleForm.apify_platforms ?? []).length} selected
+                </p>
+              </div>
+            )}
+
+            {hasSerpapi && (
+              <div className="flex flex-col gap-2">
+                <div className="flex items-center justify-between gap-2">
+                  <Label>SerpApi job platforms</Label>
+                  <div className="flex gap-1">
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="sm"
+                      onClick={() =>
+                        setScheduleForm({
+                          ...scheduleForm,
+                          serpapi_platforms: [...SERPAPI_JOB_PLATFORMS],
+                        })
+                      }
+                    >
+                      Select all
+                    </Button>
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="sm"
+                      onClick={() =>
+                        setScheduleForm({
+                          ...scheduleForm,
+                          serpapi_platforms: [...DEFAULT_SERPAPI_PLATFORMS],
+                        })
+                      }
+                    >
+                      Defaults
+                    </Button>
+                  </div>
+                </div>
+                <p className="text-xs text-muted-foreground">
+                  Applied only when SerpApi runs (Google Jobs via).
+                </p>
+                <div className="max-h-36 overflow-y-auto rounded-lg border p-3">
+                  <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+                    {SERPAPI_JOB_PLATFORMS.map((platform) => {
+                      const selected = scheduleForm.serpapi_platforms ?? []
+                      const checked = selected.some(
+                        (p) => platformKey(p) === platformKey(platform),
+                      )
+                      return (
+                        <label
+                          key={platform}
+                          className="flex cursor-pointer items-center gap-2 text-sm"
+                        >
+                          <input
+                            type="checkbox"
+                            checked={checked}
+                            onChange={() => {
+                              const next = checked
+                                ? selected.filter(
+                                    (p) =>
+                                      platformKey(p) !== platformKey(platform),
+                                  )
+                                : [...selected, platform]
+                              setScheduleForm({
+                                ...scheduleForm,
+                                serpapi_platforms: next,
+                              })
+                            }}
+                            className="size-4 accent-primary"
+                          />
+                          {platform}
+                        </label>
+                      )
+                    })}
+                  </div>
+                </div>
+                <p className="text-xs text-muted-foreground">
+                  {(scheduleForm.serpapi_platforms ?? []).length} selected
+                </p>
+              </div>
+            )}
+            </div>
+
+            <div className="grid gap-3 sm:grid-cols-2">
               <div className="flex flex-col gap-2">
                 <Label>Min salary (LPA)</Label>
                 <Input
@@ -1026,7 +1610,7 @@ export default function AdminIngestionPage() {
               </div>
             </div>
 
-            <div className="grid grid-cols-3 gap-3">
+            <div className="grid gap-3 sm:grid-cols-3">
               <div className="flex flex-col gap-2">
                 <Label>Employment type</Label>
                 <Select
@@ -1078,7 +1662,7 @@ export default function AdminIngestionPage() {
               </div>
             </div>
 
-            <div className="grid grid-cols-3 gap-3">
+            <div className="grid gap-3 sm:grid-cols-3">
               <div className="flex flex-col gap-2">
                 <Label>Posted within</Label>
                 <Select
@@ -1120,76 +1704,18 @@ export default function AdminIngestionPage() {
                 </Select>
               </div>
               <div className="flex flex-col gap-2">
-                <Label>Time</Label>
-                <div className="flex gap-2">
-                  <Select
-                    value={(() => {
-                      const t = scheduleForm.time || "9:00 AM"
-                      const h = parseInt(t.split(":")[0], 10)
-                      return String(h)
-                    })()}
-                    onValueChange={(v) => {
-                      const current = scheduleForm.time || "9:00 AM"
-                      const period = current.includes("PM") ? "PM" : "AM"
-                      const minutes = current.split(":")[1]?.split(" ")[0] || "00"
-                      setScheduleForm({ ...scheduleForm, time: `${v}:${minutes} ${period}` })
-                    }}
-                  >
-                    <SelectTrigger className="w-[70px]">
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {[12, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11].map((h) => (
-                        <SelectItem key={h} value={String(h)}>
-                          {h}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                  <span className="flex items-center text-muted-foreground">:</span>
-                  <Select
-                    value={(() => {
-                      const t = scheduleForm.time || "9:00 AM"
-                      return t.split(":")[1]?.split(" ")[0] || "00"
-                    })()}
-                    onValueChange={(v) => {
-                      const current = scheduleForm.time || "9:00 AM"
-                      const hour = current.split(":")[0]
-                      const period = current.includes("PM") ? "PM" : "AM"
-                      setScheduleForm({ ...scheduleForm, time: `${hour}:${v} ${period}` })
-                    }}
-                  >
-                    <SelectTrigger className="w-[70px]">
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {Array.from({ length: 60 }, (_, i) => String(i).padStart(2, "0")).map((m) => (
-                        <SelectItem key={m} value={m}>
-                          {m}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                  <Select
-                    value={(() => {
-                      const t = scheduleForm.time || "9:00 AM"
-                      return t.includes("PM") ? "PM" : "AM"
-                    })()}
-                    onValueChange={(v) => {
-                      const current = scheduleForm.time || "9:00 AM"
-                      const timePart = current.split(" ")[0]
-                      setScheduleForm({ ...scheduleForm, time: `${timePart} ${v}` })
-                    }}
-                  >
-                    <SelectTrigger className="w-[80px]">
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="AM">AM</SelectItem>
-                      <SelectItem value="PM">PM</SelectItem>
-                    </SelectContent>
-                  </Select>
-                </div>
+                <Label htmlFor="schedule-time">Time</Label>
+                <Input
+                  id="schedule-time"
+                  type="time"
+                  value={toTimeInputValue(scheduleForm.time || "9:00 AM")}
+                  onChange={(e) =>
+                    setScheduleForm({
+                      ...scheduleForm,
+                      time: fromTimeInputValue(e.target.value || "09:00"),
+                    })
+                  }
+                />
               </div>
             </div>
 
@@ -1234,7 +1760,7 @@ export default function AdminIngestionPage() {
               </div>
             )}
 
-            <div className="grid grid-cols-2 gap-3">
+            <div className="grid gap-3 sm:grid-cols-2">
               <div className="flex flex-col gap-2">
                 <Label>Start date</Label>
                 <Input
@@ -1265,6 +1791,12 @@ export default function AdminIngestionPage() {
             </Button>
             <Button
               onClick={saveSchedule}
+              disabled={
+                (hasApify &&
+                  (scheduleForm.apify_platforms ?? []).length === 0) ||
+                (hasSerpapi &&
+                  (scheduleForm.serpapi_platforms ?? []).length === 0)
+              }
               data-icon="inline-start"
             >
               <Timer data-icon="inline-start" />
@@ -1344,9 +1876,6 @@ export default function AdminIngestionPage() {
                   }
                 />
               </div>
-              {profileSuccess && (
-                <p className="text-sm text-emerald-600 dark:text-emerald-400">{profileSuccess}</p>
-              )}
               <Button
                 onClick={saveProfile}
                 disabled={savingProfile}
@@ -1392,9 +1921,6 @@ export default function AdminIngestionPage() {
                   />
                 </div>
               </div>
-              {passwordSuccess && (
-                <p className="text-sm text-emerald-600 dark:text-emerald-400">{passwordSuccess}</p>
-              )}
               <Button
                 onClick={savePassword}
                 disabled={savingPassword}

@@ -50,7 +50,9 @@ import {
   TableRow,
 } from "@/components/ui/table"
 import { AppShell } from "@/components/app-shell"
+import { PageHeader } from "@/components/page-header"
 import { cn } from "@/lib/utils"
+import { toast } from "sonner"
 import { useProfile, useAdminUsers } from "@/lib/hooks"
 import {
   ROLE_LABELS,
@@ -126,7 +128,6 @@ export default function AdminUsersPage() {
   const router = useRouter()
   const { data: me, isLoading: profileLoading, error: profileError } = useProfile()
   const { data: users = [], isLoading: usersLoading, refetch: refetchUsers } = useAdminUsers()
-  const [error, setError] = useState<string | null>(null)
   const [createOpen, setCreateOpen] = useState(false)
   const [saving, setSaving] = useState(false)
   const [newUser, setNewUser] = useState<NewUser>(emptyNewUser)
@@ -171,7 +172,6 @@ export default function AdminUsersPage() {
   async function createUser(e: React.FormEvent) {
     e.preventDefault()
     setSaving(true)
-    setError(null)
     try {
       await apiFetch<User>("/admin/users/", {
         method: "POST",
@@ -180,8 +180,9 @@ export default function AdminUsersPage() {
       setCreateOpen(false)
       setNewUser(emptyNewUser)
       void refetchUsers()
+      toast.success("User created successfully.")
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to create user")
+      toast.error(err instanceof Error ? err.message : "Failed to create user")
     } finally {
       setSaving(false)
     }
@@ -194,15 +195,15 @@ export default function AdminUsersPage() {
         body: JSON.stringify(patch),
       })
       refetchUsers()
+      toast.success("User updated successfully.")
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to update user")
+      toast.error(err instanceof Error ? err.message : "Failed to update user")
     }
   }
 
   async function confirmDeactivate() {
     if (!deactivateTarget) return
     setDeactivating(true)
-    setError(null)
     try {
       await apiFetch(`/admin/users/${deactivateTarget.id}/`, {
         method: "PATCH",
@@ -210,8 +211,9 @@ export default function AdminUsersPage() {
       })
       setDeactivateTarget(null)
       refetchUsers()
+      toast.success("User deactivated.")
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to deactivate user")
+      toast.error(err instanceof Error ? err.message : "Failed to deactivate user")
     } finally {
       setDeactivating(false)
     }
@@ -231,7 +233,6 @@ export default function AdminUsersPage() {
     e.preventDefault()
     if (!editTarget || !editForm) return
     setSavingEdit(true)
-    setError(null)
     try {
       await apiFetch<User>(`/admin/users/${editTarget.id}/`, {
         method: "PATCH",
@@ -240,8 +241,9 @@ export default function AdminUsersPage() {
       setEditTarget(null)
       setEditForm(null)
       refetchUsers()
+      toast.success("User updated successfully.")
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to update user")
+      toast.error(err instanceof Error ? err.message : "Failed to update user")
     } finally {
       setSavingEdit(false)
     }
@@ -250,13 +252,13 @@ export default function AdminUsersPage() {
   async function confirmDelete() {
     if (!deleteTarget) return
     setDeleting(true)
-    setError(null)
     try {
       await apiFetch(`/admin/users/${deleteTarget.id}/`, { method: "DELETE" })
       setDeleteTarget(null)
       refetchUsers()
+      toast.success("User deleted.")
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to delete user")
+      toast.error(err instanceof Error ? err.message : "Failed to delete user")
     } finally {
       setDeleting(false)
     }
@@ -268,27 +270,24 @@ export default function AdminUsersPage() {
 
   return (
     <AppShell user={me} loading={profileLoading}>
-      <div className="p-4 sm:p-6 space-y-6">
-        <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
-          <div>
-            <h1 className="text-2xl font-bold tracking-tight text-foreground">
-              User Management
-            </h1>
-            <p className="text-sm text-muted-foreground">
-              Create users, assign roles, and manage active status
-            </p>
-          </div>
-          <Button onClick={() => setCreateOpen(true)} data-icon="inline-start">
-            <Plus data-icon="inline-start" />
-            Add user
-          </Button>
-        </div>
-
-        {error && (
-          <div className="rounded-lg border border-destructive/30 bg-destructive/5 px-4 py-3 text-sm text-destructive">
-            {error}
-          </div>
-        )}
+      <div className="space-y-6 p-4 sm:p-6">
+        <PageHeader
+          variant="banner"
+          icon={Users}
+          title="User Management"
+          description="Create users, assign roles, and manage active status across the platform."
+          actions={
+            <Button
+              variant="outline"
+              onClick={() => setCreateOpen(true)}
+              data-icon="inline-start"
+              className="border-white/40 bg-transparent text-white hover:bg-white/10 hover:text-white"
+            >
+              <Plus data-icon="inline-start" />
+              Add user
+            </Button>
+          }
+        />
 
         <div className="grid gap-3 sm:grid-cols-3">
           <Card>

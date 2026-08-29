@@ -57,6 +57,7 @@ class EnrichmentSourceViewSet(viewsets.ModelViewSet):
         try:
             provider = get_enrichment_provider(source)
             ok = provider.health_check()
+            credits = provider.persist_credit_usage()
         except ProviderError as exc:
             source.health_status = EnrichmentSource.HealthStatus.FAILED
             source.save(update_fields=['health_status'])
@@ -73,16 +74,41 @@ class EnrichmentSourceViewSet(viewsets.ModelViewSet):
         )
         source.last_run_at = now
         source.save(update_fields=['health_status', 'last_run_at'])
+        source.refresh_from_db(fields=['credit_usage'])
         return Response({
             'success': ok,
             'provider': source.provider_code,
             'status': source.health_status,
+            'credit_usage': credits or source.credit_usage,
             'message': (
-                f'Connection OK for {source.name}. API responded successfully.'
-                if ok
-                else f'Connection failed for {source.name}. Check the API key.'
+                'Connection successful.' if ok else 'Connection check failed.'
             ),
-            'checked_at': now.isoformat(),
+        }, status=status.HTTP_200_OK)
+
+    @action(detail=True, methods=['post'], url_path='refresh-credits')
+    def refresh_credits(self, request, pk=None):
+        """Pull live remaining credits from the provider API."""
+        source = self.get_object()
+        if not source.has_auth_config():
+            return Response({
+                'success': False,
+                'message': 'API credentials are not configured.',
+                'credit_usage': source.credit_usage or {},
+            }, status=status.HTTP_200_OK)
+        try:
+            provider = get_enrichment_provider(source)
+            credits = provider.persist_credit_usage()
+        except ProviderError as exc:
+            return Response({
+                'success': False,
+                'message': str(exc),
+                'credit_usage': source.credit_usage or {},
+            }, status=status.HTTP_200_OK)
+        return Response({
+            'success': True,
+            'provider': source.provider_code,
+            'credit_usage': credits,
+            'message': 'Credits refreshed.',
         }, status=status.HTTP_200_OK)
 
 
@@ -292,7 +318,7 @@ class ContactViewSet(viewsets.ReadOnlyModelViewSet):
 
 class EnrichmentRunView(APIView):
     """FR-022: Waterfall contact enrichment for a target company.
-    PDL -> ContactOut -> Apollo; stops once a verified email + LinkedIn
+    ContactOut -> Apollo; stops once a verified email + LinkedIn
     contact is found. Contacts are stored with full provenance."""
 
     permission_classes = [IsMarketAnalyst]
@@ -363,6 +389,15 @@ class EnrichmentRunView(APIView):
                 current_daily_uses=F('current_daily_uses') + 1,
                 last_run_at=datetime.now(timezone.utc),
             )
+            # Refresh live credit balances after enrichment spend.
+            for code in used:
+                source = EnrichmentSource.objects.filter(provider_code=code).first()
+                if source is None or not source.has_auth_config():
+                    continue
+                try:
+                    get_enrichment_provider(source).persist_credit_usage()
+                except Exception as exc:  # noqa: BLE001
+                    logger.warning("Failed to refresh credits for %s: %s", code, exc)
 
         logger.info(
             "Enrichment run %s COMPLETED for %s: %s contact(s) found, %s stored, "

@@ -161,6 +161,7 @@ class JobSourceViewSet(viewsets.ModelViewSet):
         try:
             provider = get_provider(source)
             healthy = provider.health_check()
+            credits = provider.persist_credit_usage()
             headroom = max(0, source.rate_limit_daily - source.current_daily_uses)
         except ProviderError as exc:
             source.health_status = JobSource.HealthStatus.FAILED
@@ -187,13 +188,41 @@ class JobSourceViewSet(viewsets.ModelViewSet):
         source.health_status = JobSource.HealthStatus.HEALTHY
         source.last_run_at = now
         source.save(update_fields=['health_status', 'last_run_at'])
+        source.refresh_from_db(fields=['credit_usage'])
         return Response({
             'success': True,
             'provider': source.provider_code,
             'status': source.health_status,
             'message': f'Connection OK for {source.name}. API responded successfully.',
             'rate_limit_headroom': headroom,
+            'credit_usage': credits or source.credit_usage,
             'checked_at': now.isoformat(),
+        }, status=status.HTTP_200_OK)
+
+    @action(detail=True, methods=['post'], url_path='refresh-credits')
+    def refresh_credits(self, request, pk=None):
+        """Pull live remaining credits from SerpAPI Account API or Apify limits."""
+        source = self.get_object()
+        if not source.has_auth_config():
+            return Response({
+                'success': False,
+                'message': 'API credentials are not configured.',
+                'credit_usage': source.credit_usage or {},
+            }, status=status.HTTP_200_OK)
+        try:
+            provider = get_provider(source)
+            credits = provider.persist_credit_usage()
+        except ProviderError as exc:
+            return Response({
+                'success': False,
+                'message': str(exc),
+                'credit_usage': source.credit_usage or {},
+            }, status=status.HTTP_200_OK)
+        return Response({
+            'success': True,
+            'provider': source.provider_code,
+            'credit_usage': credits,
+            'message': 'Credits refreshed.',
         }, status=status.HTTP_200_OK)
 
     @action(detail=True, methods=['post'], url_path='run-ingestion')
@@ -243,6 +272,9 @@ class JobSourceViewSet(viewsets.ModelViewSet):
         work_mode = str(request.data.get('work_mode', '')).strip() or source.default_params.get('work_mode', '')
         role = str(request.data.get('role', '')).strip() or source.default_params.get('role', '')
         posted_within = str(request.data.get('posted_within', '')).strip() or source.default_params.get('posted_within', '')
+        platforms = request.data.get('platforms')
+        if platforms is None:
+            platforms = source.default_params.get('platforms')
 
         run = IngestionRun.objects.create(
             provider=source,
@@ -266,7 +298,15 @@ class JobSourceViewSet(viewsets.ModelViewSet):
                 'role': role,
                 'posted_within': posted_within,
             }
+            if platforms is not None:
+                filters['platforms'] = platforms
+            # Cap to Source Management Max results (same rule as Celery tasks).
+            from core.tasks import _apply_source_result_cap
+            filters = _apply_source_result_cap(source, filters)
             raw_records = provider.search_jobs(filters)
+            cap = int(filters.get('max_results') or max_pages or 1)
+            if len(raw_records) > cap:
+                raw_records = raw_records[:cap]
 
             for record in raw_records:
                 try:
@@ -300,6 +340,11 @@ class JobSourceViewSet(viewsets.ModelViewSet):
                 health_status=JobSource.HealthStatus.HEALTHY,
                 last_run_at=now,
             )
+            try:
+                provider.persist_credit_usage()
+            except Exception:  # noqa: BLE001
+                pass
+            source.refresh_from_db(fields=['credit_usage'])
             return Response({
                 'success': run.status in (
                     IngestionRun.Status.COMPLETED,
@@ -315,6 +360,7 @@ class JobSourceViewSet(viewsets.ModelViewSet):
                 'fetched_count': fetched,
                 'error_count': len(errors),
                 'errors': errors[:5],
+                'credit_usage': source.credit_usage or {},
                 'started_at': run.started_at.isoformat(),
                 'ended_at': run.ended_at.isoformat(),
             }, status=status.HTTP_200_OK)

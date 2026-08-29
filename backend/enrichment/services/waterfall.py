@@ -1,4 +1,4 @@
-"""Waterfall orchestrator (Module 3): PDL -> ContactOut -> Apollo -> Lusha with early exit (FR-022)."""
+"""Waterfall orchestrator (Module 3): ContactOut -> Apollo with early exit (FR-022)."""
 
 import logging
 import time
@@ -9,7 +9,8 @@ from enrichment.providers import ProviderError, get_enrichment_provider
 
 logger = logging.getLogger(__name__)
 
-PROVIDER_ORDER = ["pdl", "contactout", "apollo", "lusha"]
+PROVIDER_ORDER = ["contactout", "apollo"]
+
 
 
 class EnrichmentWaterfallOrchestrator:
@@ -55,6 +56,14 @@ class EnrichmentWaterfallOrchestrator:
                     "message": str(exc),
                 })
                 logger.warning("Enrichment provider %s SKIPPED: %s", provider_code, exc)
+
+    @staticmethod
+    def _is_quota_error(message: str) -> bool:
+        lowered = message.lower()
+        return any(
+            marker in lowered
+            for marker in ("credit", "quota", "limit", "upgrade", "insufficient")
+        )
 
     def _is_sufficient(self, contact: Dict[str, Any]) -> bool:
         """Check if target contact fields meet early-exit threshold (FR-022).
@@ -111,9 +120,23 @@ class EnrichmentWaterfallOrchestrator:
 
             entry["results"] = len(people)
             entry["message"] = f"search returned {len(people)} candidate(s)"
+            usage = getattr(getattr(provider, "config", None), "credit_usage", None) or {}
+            remaining = usage.get("email_remaining")
+            quota = usage.get("email_quota")
+            if remaining is not None:
+                entry["credits_remaining"] = remaining
+                entry["credits_quota"] = quota
+                if quota is not None:
+                    entry["message"] += f"; {remaining} of {quota} email credits remaining"
+                else:
+                    entry["message"] += f"; {remaining} email credit(s) remaining"
             entry["candidates"] = [
                 person for person in people if isinstance(person, dict)
             ][:50]
+
+            emails_found = 0
+            phones_found = 0
+            enrich_errors: List[str] = []
 
             for person in people:
                 if not isinstance(person, dict):
@@ -122,22 +145,47 @@ class EnrichmentWaterfallOrchestrator:
                     enriched = provider.enrich_person(person)
                 except Exception as exc:  # noqa: BLE001
                     logger.warning("Provider %s enrich failed: %s", provider_code, exc)
-                    enriched = person
+                    enriched = dict(person)
+                    enriched["enrichment_error"] = str(exc)
                 if not isinstance(enriched, dict):
                     continue
                 enriched.setdefault("provider_source", provider_code)
                 contacts.append(enriched)
                 entry["contacts"] += 1
+                if enriched.get("email"):
+                    emails_found += 1
+                if enriched.get("phone"):
+                    phones_found += 1
+
+                reason = enriched.get("enrichment_error")
+                if reason and reason not in enrich_errors:
+                    enrich_errors.append(str(reason))
+
                 if self._is_sufficient(enriched):
                     entry["verified"] = True
-                    entry["message"] += (
-                        f"; verified contact found, waterfall terminated"
-                    )
+                    entry["message"] += "; verified contact found, waterfall terminated"
                     logger.info(
                         "Waterfall target satisfied via %s. Terminating search.",
                         provider_code,
                     )
                     break
+
+                # A quota/credit wall applies to the whole account, so retrying
+                # the remaining candidates only burns time (and sometimes credits).
+                if reason and self._is_quota_error(str(reason)):
+                    entry["status"] = "degraded"
+                    logger.warning(
+                        "Provider %s hit a credit/quota limit; skipping remaining candidates",
+                        provider_code,
+                    )
+                    break
+
+            entry["emails_found"] = emails_found
+            entry["phones_found"] = phones_found
+            entry["message"] += f"; {emails_found} email(s), {phones_found} phone(s)"
+            if enrich_errors:
+                entry["errors"] = enrich_errors[:5]
+                entry["message"] += f"; {enrich_errors[0]}"
 
             entry["latency_ms"] = round((time.perf_counter() - started) * 1000)
             call_logs.append(entry)

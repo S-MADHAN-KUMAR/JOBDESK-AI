@@ -11,7 +11,7 @@ A modern, role-based demand acceleration platform built with **Next.js 15 (App R
 | **Authentication** | JWT login/refresh/logout with HttpOnly-compatible localStorage tokens |
 | **RBAC** | 5 roles (Admin, Market Analyst, CEO/Management, Training Manager, Recruitment Team) — enforced on both frontend routes and backend APIs |
 | **Job Explorer** | Search, filter, paginate, bulk delete, and enrich raw job records from multiple providers |
-| **Contact Enrichment** | Run provider waterfall (PDL → ContactOut → Apollo → Lusha) to find recruiters/TA contacts with verification state |
+| **Contact Enrichment** | Run provider waterfall (ContactOut → Apollo) to find recruiters/TA contacts with verification state |
 | **Source Management (Admin)** | Configure job ingestion connectors (base URL, rate limits, default params, credentials, health status) |
 | **Enrichment Sources (Admin)** | Configure contact-enrichment connectors with provider codes, rate limits, and test connections |
 | **User Management (Admin)** | CRUD users, assign roles, activate/deactivate, pagination, search, role filter |
@@ -191,7 +191,7 @@ NEXT_PUBLIC_API_URL=http://localhost:8000/api
 - Click row → side panel with full raw payload
 
 ### 4. Contact Enrichment (`/enrichment`)
-- **Run enrichment**: company + optional titles + location → waterfall (PDL → ContactOut → Apollo)
+- **Run enrichment**: company + optional titles + location → waterfall (ContactOut → Apollo)
 - Real-time call logs table (provider, status, latency, verified)
 - **Enriched contacts table**: filter by provider & verification state, paginated
 - Deep link from Job Explorer: `/enrichment?company=Acme&location=Chennai&autoRun=1`
@@ -212,7 +212,7 @@ NEXT_PUBLIC_API_URL=http://localhost:8000/api
 
 ### 7. Admin — Enrichment Sources (`/admin/enrichment-sources`)
 - Same pattern as Source Management but for contact-enrichment providers
-- Provider codes: `pdl`, `contactout`, `apollo`, `lusha`
+- Provider codes: `contactout`, `apollo`
 - **Test connection** runs a lightweight health check
 
 ---

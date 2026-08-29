@@ -13,10 +13,10 @@ class EnrichmentSourceSerializer(serializers.ModelSerializer):
             'id', 'name', 'provider_code', 'is_active', 'base_url',
             'auth_config', 'auth_configured', 'default_params',
             'rate_limit_rpm', 'rate_limit_daily', 'current_daily_uses',
-            'health_status', 'last_run_at', 'created_at', 'updated_at',
+            'credit_usage', 'health_status', 'last_run_at', 'created_at', 'updated_at',
         ]
         read_only_fields = [
-            'id', 'current_daily_uses', 'health_status',
+            'id', 'current_daily_uses', 'credit_usage', 'health_status',
             'last_run_at', 'created_at', 'updated_at',
         ]
 

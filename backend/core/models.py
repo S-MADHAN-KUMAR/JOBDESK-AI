@@ -46,6 +46,11 @@ class JobSource(models.Model):
     rate_limit_rpm = models.PositiveIntegerField(default=60)
     rate_limit_daily = models.PositiveIntegerField(default=1000)
     current_daily_uses = models.PositiveIntegerField(default=0)
+    credit_usage = models.JSONField(
+        default=dict,
+        blank=True,
+        help_text='Latest provider credit balances (searches/USD/compute units).',
+    )
     health_status = models.CharField(
         max_length=20,
         choices=HealthStatus.choices,

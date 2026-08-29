@@ -2,13 +2,11 @@ from core.models import JobSource
 
 from .apify import ApifyProvider
 from .base import JobSourceProvider, ProviderError
-from .coresignal import CoresignalProvider
 from .serpapi import SerpApiProvider
 
 PROVIDER_REGISTRY: dict[str, type[JobSourceProvider]] = {
     "serpapi": SerpApiProvider,
     "apify": ApifyProvider,
-    "coresignal": CoresignalProvider,
 }
 
 
@@ -22,7 +20,6 @@ def get_provider(source: JobSource) -> JobSourceProvider:
 
 __all__ = [
     "ApifyProvider",
-    "CoresignalProvider",
     "JobSourceProvider",
     "PROVIDER_REGISTRY",
     "ProviderError",

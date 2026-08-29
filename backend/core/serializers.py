@@ -42,11 +42,38 @@ class UserProfileSerializer(serializers.ModelSerializer):
     class Meta:
         model = User
         fields = ['id', 'username', 'email', 'first_name', 'last_name', 'role', 'is_active']
+        read_only_fields = ['id', 'role', 'is_active']
+
+    def validate_username(self, value):
+        value = (value or '').strip()
+        if not value:
+            raise serializers.ValidationError('Username is required.')
+        qs = User.objects.filter(username__iexact=value)
+        if self.instance is not None:
+            qs = qs.exclude(pk=self.instance.pk)
+        if qs.exists():
+            raise serializers.ValidationError('This username is already taken.')
+        return value
+
+    def validate_email(self, value):
+        value = (value or '').strip()
+        if value:
+            qs = User.objects.filter(email__iexact=value)
+            if self.instance is not None:
+                qs = qs.exclude(pk=self.instance.pk)
+            if qs.exists():
+                raise serializers.ValidationError('This email is already in use.')
+        return value
 
 
 class PasswordChangeSerializer(serializers.Serializer):
     current_password = serializers.CharField(write_only=True)
     new_password = serializers.CharField(write_only=True, min_length=8)
+
+    def validate_new_password(self, value):
+        if len(value) < 8:
+            raise serializers.ValidationError('Password must be at least 8 characters.')
+        return value
 
 
 class JobSourceSerializer(serializers.ModelSerializer):
@@ -59,10 +86,10 @@ class JobSourceSerializer(serializers.ModelSerializer):
             'id', 'name', 'provider_code', 'is_active', 'base_url',
             'auth_config', 'auth_configured', 'default_params',
             'rate_limit_rpm', 'rate_limit_daily', 'current_daily_uses',
-            'health_status', 'last_run_at', 'created_at', 'updated_at',
+            'credit_usage', 'health_status', 'last_run_at', 'created_at', 'updated_at',
         ]
         read_only_fields = [
-            'id', 'current_daily_uses', 'health_status',
+            'id', 'current_daily_uses', 'credit_usage', 'health_status',
             'last_run_at', 'created_at', 'updated_at',
         ]
 

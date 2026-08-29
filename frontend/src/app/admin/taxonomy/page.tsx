@@ -12,6 +12,7 @@ import {
   Pencil,
   Search,
   Settings2,
+  Tags,
   Trash2,
   Wrench,
   X,
@@ -50,32 +51,39 @@ import {
   SelectValue,
 } from "@/components/ui/select"
 import { AppShell } from "@/components/app-shell"
+import { PageHeader } from "@/components/page-header"
+import { toast } from "sonner"
 import {
   fetchMasterCompanies,
   type MasterCompany,
   createMasterCompany,
   updateMasterCompany,
   deleteMasterCompany,
+  bulkDeleteMasterCompanies,
   fetchMasterLocations,
   type MasterLocation,
   createMasterLocation,
   updateMasterLocation,
   deleteMasterLocation,
+  bulkDeleteMasterLocations,
   fetchMasterRoles,
   type MasterJobRole,
   createMasterRole,
   updateMasterRole,
   deleteMasterRole,
+  bulkDeleteMasterRoles,
   fetchMasterTechnologies,
   type MasterTechnology,
   createMasterTechnology,
   updateMasterTechnology,
   deleteMasterTechnology,
+  bulkDeleteMasterTechnologies,
   fetchMasterSkills,
   type MasterSkill,
   createMasterSkill,
   updateMasterSkill,
   deleteMasterSkill,
+  bulkDeleteMasterSkills,
 } from "@/lib/api"
 import { useProfile } from "@/lib/hooks"
 import { cn } from "@/lib/utils"
@@ -98,7 +106,6 @@ export default function AdminTaxonomyPage() {
   const router = useRouter()
   const { data: me, isLoading: profileLoading, error: profileError } = useProfile()
   const [loading, setLoading] = useState(true)
-  const [error, setError] = useState<string | null>(null)
   const [reloadKey, setReloadKey] = useState(0)
 
   const [activeTab, setActiveTab] = useState<Tab>("companies")
@@ -135,6 +142,8 @@ export default function AdminTaxonomyPage() {
     | null
   >(null)
   const [deleting, setDeleting] = useState(false)
+  const [selected, setSelected] = useState<Set<string>>(new Set())
+  const [bulkDeleteOpen, setBulkDeleteOpen] = useState(false)
 
   const [companyForm, setCompanyForm] = useState({
     name: "",
@@ -175,7 +184,7 @@ export default function AdminTaxonomyPage() {
     async function run() {
       try {
         if (!me || me.role !== "ADMIN") {
-          setError("Access denied: Admin role required.")
+          toast.error("Access denied: Admin role required.")
           return
         }
 
@@ -192,10 +201,11 @@ export default function AdminTaxonomyPage() {
           setRoles(r)
           setTechnologies(t)
           setSkills(s)
+          setSelected(new Set())
         }
       } catch (err) {
         if (cancelled) return
-        setError(err instanceof Error ? err.message : "Failed to load master data")
+        toast.error(err instanceof Error ? err.message : "Failed to load master data")
       } finally {
         if (!cancelled) setLoading(false)
       }
@@ -261,7 +271,6 @@ export default function AdminTaxonomyPage() {
   async function saveForm(e: React.FormEvent) {
     e.preventDefault()
     setSaving(true)
-    setError(null)
     try {
       if (activeTab === "companies") {
         const data = {
@@ -304,8 +313,9 @@ export default function AdminTaxonomyPage() {
       }
       setFormOpen(false)
       refresh()
+      toast.success(editing ? "Record updated." : "Record created.")
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to save record")
+      toast.error(err instanceof Error ? err.message : "Failed to save record")
     } finally {
       setSaving(false)
     }
@@ -314,7 +324,6 @@ export default function AdminTaxonomyPage() {
   async function confirmDelete() {
     if (!deleteTarget) return
     setDeleting(true)
-    setError(null)
     try {
       if (activeTab === "companies") {
         await deleteMasterCompany(deleteTarget.id)
@@ -329,8 +338,9 @@ export default function AdminTaxonomyPage() {
       }
       setDeleteTarget(null)
       refresh()
+      toast.success("Record deleted.")
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to delete record")
+      toast.error(err instanceof Error ? err.message : "Failed to delete record")
     } finally {
       setDeleting(false)
     }
@@ -377,6 +387,64 @@ export default function AdminTaxonomyPage() {
       s.technology_name.toLowerCase().includes(q)
     )
   })
+
+  const filteredIds =
+    activeTab === "companies"
+      ? filteredCompanies.map((c) => c.id)
+      : activeTab === "locations"
+        ? filteredLocations.map((l) => l.id)
+        : activeTab === "roles"
+          ? filteredRoles.map((r) => r.id)
+          : activeTab === "technologies"
+            ? filteredTechs.map((t) => t.id)
+            : filteredSkills.map((s) => s.id)
+
+  const allSelected =
+    filteredIds.length > 0 && filteredIds.every((id) => selected.has(id))
+
+  function toggleSelect(id: string) {
+    setSelected((prev) => {
+      const next = new Set(prev)
+      if (next.has(id)) next.delete(id)
+      else next.add(id)
+      return next
+    })
+  }
+
+  function toggleSelectAll() {
+    setSelected((prev) =>
+      filteredIds.length > 0 && filteredIds.every((id) => prev.has(id))
+        ? new Set()
+        : new Set(filteredIds),
+    )
+  }
+
+  async function confirmBulkDelete() {
+    if (selected.size === 0) return
+    setDeleting(true)
+    try {
+      const ids = [...selected]
+      if (activeTab === "companies") {
+        await bulkDeleteMasterCompanies(ids)
+      } else if (activeTab === "locations") {
+        await bulkDeleteMasterLocations(ids)
+      } else if (activeTab === "roles") {
+        await bulkDeleteMasterRoles(ids)
+      } else if (activeTab === "technologies") {
+        await bulkDeleteMasterTechnologies(ids)
+      } else {
+        await bulkDeleteMasterSkills(ids)
+      }
+      setBulkDeleteOpen(false)
+      setSelected(new Set())
+      refresh()
+      toast.success(`Deleted ${ids.length} record(s).`)
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Failed to delete records")
+    } finally {
+      setDeleting(false)
+    }
+  }
 
   const getSearch = (tab: Tab) => {
     if (tab === "companies") return companySearch
@@ -445,27 +513,36 @@ export default function AdminTaxonomyPage() {
 
   return (
     <AppShell user={me} loading={loading}>
-      <div className="p-4 sm:p-6 space-y-6">
-        <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
-          <div>
-            <h1 className="text-2xl font-bold tracking-tight text-foreground">
-              Taxonomy &amp; Master Data
-            </h1>
-            <p className="text-sm text-muted-foreground">
-              Govern reference data used for job classification and analytics
-            </p>
-          </div>
-          <Button onClick={openCreate} data-icon="inline-start">
-            <Plus data-icon="inline-start" />
-            Add new
-          </Button>
-        </div>
-
-        {error && (
-          <div className="rounded-lg border border-destructive/30 bg-destructive/5 px-4 py-3 text-sm text-destructive">
-            {error}
-          </div>
-        )}
+      <div className="space-y-6 p-4 sm:p-6">
+        <PageHeader
+          variant="banner"
+          icon={Tags}
+          title="Taxonomy & Master Data"
+          description="Govern reference data used for job classification and analytics."
+          actions={
+            <>
+              {selected.size > 0 && (
+                <Button
+                  variant="destructive"
+                  onClick={() => setBulkDeleteOpen(true)}
+                  data-icon="inline-start"
+                >
+                  <Trash2 data-icon="inline-start" />
+                  Delete selected ({selected.size})
+                </Button>
+              )}
+              <Button
+                variant="outline"
+                onClick={openCreate}
+                data-icon="inline-start"
+                className="border-white/40 bg-transparent text-white hover:bg-white/10 hover:text-white"
+              >
+                <Plus data-icon="inline-start" />
+                Add new
+              </Button>
+            </>
+          }
+        />
 
         <div className="flex flex-wrap gap-2 border-b pb-px">
           {TAB_META.map((tab) => {
@@ -474,7 +551,10 @@ export default function AdminTaxonomyPage() {
             return (
               <button
                 key={tab.key}
-                onClick={() => setActiveTab(tab.key)}
+                onClick={() => {
+                  setActiveTab(tab.key)
+                  setSelected(new Set())
+                }}
                 className={cn(
                   "inline-flex items-center gap-1.5 rounded-t-lg px-3 py-2 text-sm font-medium transition-colors",
                   isActive
@@ -553,7 +633,16 @@ export default function AdminTaxonomyPage() {
                 <Table>
                   <TableHeader>
                     <TableRow className="hover:bg-transparent">
-                      <TableHead className="px-4">Name</TableHead>
+                      <TableHead className="w-10 px-4">
+                        <input
+                          type="checkbox"
+                          aria-label="Select all companies"
+                          checked={allSelected}
+                          onChange={toggleSelectAll}
+                          className="size-4 accent-primary"
+                        />
+                      </TableHead>
+                      <TableHead>Name</TableHead>
                       <TableHead className="hidden md:table-cell">Normalized</TableHead>
                       <TableHead className="hidden md:table-cell">Domain</TableHead>
                       <TableHead className="hidden lg:table-cell">Location</TableHead>
@@ -565,6 +654,15 @@ export default function AdminTaxonomyPage() {
                     {filteredCompanies.map((c) => (
                       <TableRow key={c.id}>
                         <TableCell className="px-4">
+                          <input
+                            type="checkbox"
+                            aria-label={`Select ${c.name}`}
+                            checked={selected.has(c.id)}
+                            onChange={() => toggleSelect(c.id)}
+                            className="size-4 accent-primary"
+                          />
+                        </TableCell>
+                        <TableCell>
                           <span className="font-medium">{c.name}</span>
                         </TableCell>
                         <TableCell className="hidden md:table-cell">
@@ -622,7 +720,16 @@ export default function AdminTaxonomyPage() {
                 <Table>
                   <TableHeader>
                     <TableRow className="hover:bg-transparent">
-                      <TableHead className="px-4">Raw Text</TableHead>
+                      <TableHead className="w-10 px-4">
+                        <input
+                          type="checkbox"
+                          aria-label="Select all locations"
+                          checked={allSelected}
+                          onChange={toggleSelectAll}
+                          className="size-4 accent-primary"
+                        />
+                      </TableHead>
+                      <TableHead>Raw Text</TableHead>
                       <TableHead className="hidden md:table-cell">City</TableHead>
                       <TableHead className="hidden md:table-cell">State</TableHead>
                       <TableHead className="hidden md:table-cell">Country</TableHead>
@@ -634,7 +741,16 @@ export default function AdminTaxonomyPage() {
                   <TableBody>
                     {filteredLocations.map((l) => (
                       <TableRow key={l.id}>
-                        <TableCell className="px-4 font-medium">{l.raw_text}</TableCell>
+                        <TableCell className="px-4">
+                          <input
+                            type="checkbox"
+                            aria-label={`Select ${l.raw_text}`}
+                            checked={selected.has(l.id)}
+                            onChange={() => toggleSelect(l.id)}
+                            className="size-4 accent-primary"
+                          />
+                        </TableCell>
+                        <TableCell className="font-medium">{l.raw_text}</TableCell>
                         <TableCell className="hidden md:table-cell text-sm">
                           {l.city || "—"}
                         </TableCell>
@@ -690,7 +806,16 @@ export default function AdminTaxonomyPage() {
                 <Table>
                   <TableHeader>
                     <TableRow className="hover:bg-transparent">
-                      <TableHead className="px-4">Name</TableHead>
+                      <TableHead className="w-10 px-4">
+                        <input
+                          type="checkbox"
+                          aria-label="Select all roles"
+                          checked={allSelected}
+                          onChange={toggleSelectAll}
+                          className="size-4 accent-primary"
+                        />
+                      </TableHead>
+                      <TableHead>Name</TableHead>
                       <TableHead className="hidden md:table-cell">Category</TableHead>
                       <TableHead className="hidden sm:table-cell">Created</TableHead>
                       <TableHead className="px-4 text-right">Actions</TableHead>
@@ -699,7 +824,16 @@ export default function AdminTaxonomyPage() {
                   <TableBody>
                     {filteredRoles.map((r) => (
                       <TableRow key={r.id}>
-                        <TableCell className="px-4 font-medium">{r.name}</TableCell>
+                        <TableCell className="px-4">
+                          <input
+                            type="checkbox"
+                            aria-label={`Select ${r.name}`}
+                            checked={selected.has(r.id)}
+                            onChange={() => toggleSelect(r.id)}
+                            className="size-4 accent-primary"
+                          />
+                        </TableCell>
+                        <TableCell className="font-medium">{r.name}</TableCell>
                         <TableCell className="hidden md:table-cell">
                           <Badge variant="secondary" className="font-mono text-xs">
                             {r.category}
@@ -746,7 +880,16 @@ export default function AdminTaxonomyPage() {
                 <Table>
                   <TableHeader>
                     <TableRow className="hover:bg-transparent">
-                      <TableHead className="px-4">Name</TableHead>
+                      <TableHead className="w-10 px-4">
+                        <input
+                          type="checkbox"
+                          aria-label="Select all technologies"
+                          checked={allSelected}
+                          onChange={toggleSelectAll}
+                          className="size-4 accent-primary"
+                        />
+                      </TableHead>
+                      <TableHead>Name</TableHead>
                       <TableHead className="hidden md:table-cell">Category</TableHead>
                       <TableHead className="hidden sm:table-cell">Created</TableHead>
                       <TableHead className="px-4 text-right">Actions</TableHead>
@@ -755,7 +898,16 @@ export default function AdminTaxonomyPage() {
                   <TableBody>
                     {filteredTechs.map((t) => (
                       <TableRow key={t.id}>
-                        <TableCell className="px-4 font-medium">{t.name}</TableCell>
+                        <TableCell className="px-4">
+                          <input
+                            type="checkbox"
+                            aria-label={`Select ${t.name}`}
+                            checked={selected.has(t.id)}
+                            onChange={() => toggleSelect(t.id)}
+                            className="size-4 accent-primary"
+                          />
+                        </TableCell>
+                        <TableCell className="font-medium">{t.name}</TableCell>
                         <TableCell className="hidden md:table-cell">
                           <Badge variant="secondary" className="font-mono text-xs">
                             {t.category}
@@ -802,7 +954,16 @@ export default function AdminTaxonomyPage() {
                 <Table>
                   <TableHeader>
                     <TableRow className="hover:bg-transparent">
-                      <TableHead className="px-4">Name</TableHead>
+                      <TableHead className="w-10 px-4">
+                        <input
+                          type="checkbox"
+                          aria-label="Select all skills"
+                          checked={allSelected}
+                          onChange={toggleSelectAll}
+                          className="size-4 accent-primary"
+                        />
+                      </TableHead>
+                      <TableHead>Name</TableHead>
                       <TableHead className="hidden md:table-cell">Technology</TableHead>
                       <TableHead className="hidden sm:table-cell">Created</TableHead>
                       <TableHead className="px-4 text-right">Actions</TableHead>
@@ -811,7 +972,16 @@ export default function AdminTaxonomyPage() {
                   <TableBody>
                     {filteredSkills.map((s) => (
                       <TableRow key={s.id}>
-                        <TableCell className="px-4 font-medium">{s.name}</TableCell>
+                        <TableCell className="px-4">
+                          <input
+                            type="checkbox"
+                            aria-label={`Select ${s.name}`}
+                            checked={selected.has(s.id)}
+                            onChange={() => toggleSelect(s.id)}
+                            className="size-4 accent-primary"
+                          />
+                        </TableCell>
+                        <TableCell className="font-medium">{s.name}</TableCell>
                         <TableCell className="hidden md:table-cell">
                           {s.technology_name ? (
                             <Badge variant="secondary" className="font-mono text-xs">
@@ -1160,6 +1330,44 @@ export default function AdminTaxonomyPage() {
             >
               {deleting && <Loader2 className="animate-spin" data-icon="inline-start" />}
               {deleting ? "Deleting..." : "Delete"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Bulk Delete Confirmation Dialog */}
+      <Dialog
+        open={bulkDeleteOpen}
+        onOpenChange={(open) => !open && setBulkDeleteOpen(false)}
+      >
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Delete selected records?</DialogTitle>
+            <DialogDescription>
+              This permanently removes {selected.size} selected record
+              {selected.size === 1 ? "" : "s"}. This action cannot be undone.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button
+              variant="outline"
+              onClick={() => setBulkDeleteOpen(false)}
+              disabled={deleting}
+            >
+              Cancel
+            </Button>
+            <Button
+              variant="destructive"
+              onClick={() => void confirmBulkDelete()}
+              disabled={deleting}
+              data-icon="inline-start"
+            >
+              {deleting ? (
+                <Loader2 className="animate-spin" data-icon="inline-start" />
+              ) : (
+                <Trash2 data-icon="inline-start" />
+              )}
+              {deleting ? "Deleting..." : `Delete ${selected.size}`}
             </Button>
           </DialogFooter>
         </DialogContent>

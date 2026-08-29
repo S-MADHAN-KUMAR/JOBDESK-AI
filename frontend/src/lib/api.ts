@@ -74,6 +74,7 @@ export async function fetchProfile(): Promise<User> {
 }
 
 export async function updateProfile(data: {
+  username?: string
   first_name?: string
   last_name?: string
   email?: string
@@ -145,17 +146,28 @@ export async function apiFetch<T>(
 
   if (!res.ok) {
     const text = await res.text().catch(() => "")
-    let detail: string | undefined
+    let message = `Request failed (${res.status})`
     if (text) {
       try {
-        detail = JSON.parse(text).detail
+        const body = JSON.parse(text) as Record<string, unknown>
+        if (typeof body.detail === "string") {
+          message = body.detail
+        } else if (Array.isArray(body.detail)) {
+          message = body.detail.map(String).join(" · ")
+        } else {
+          const parts: string[] = []
+          for (const [key, value] of Object.entries(body)) {
+            if (key === "detail") continue
+            if (Array.isArray(value)) parts.push(`${key}: ${value.join(" ")}`)
+            else if (typeof value === "string") parts.push(`${key}: ${value}`)
+          }
+          if (parts.length) message = parts.join(" · ")
+        }
       } catch {
-        detail = undefined
+        if (text.trim()) message = text.trim()
       }
     }
-    throw new Error(
-      typeof detail === "string" ? detail : `Request failed (${res.status})`,
-    )
+    throw new Error(message)
   }
   const text = await res.text().catch(() => "")
   if (!text) return undefined as T
@@ -243,6 +255,26 @@ export function deleteRawJobs(ids: string[]): Promise<BulkDeleteResult> {
 // Contact enrichment (SRS Section 7)
 // ---------------------------------------------------------------------------
 
+export type EnrichmentCreditUsage = {
+  provider?: string
+  updated_at?: string
+  email_remaining?: number | null
+  email_quota?: number | null
+  email_used?: number | null
+  phone_remaining?: number | null
+  phone_quota?: number | null
+  phone_used?: number | null
+  search_remaining?: number | null
+  search_quota?: number | null
+  search_used?: number | null
+  export_remaining?: number | null
+  export_quota?: number | null
+  export_used?: number | null
+  cycle_start?: string | null
+  cycle_end?: string | null
+  credit_source?: string
+}
+
 export type EnrichmentSource = {
   id: string
   name: string
@@ -254,6 +286,7 @@ export type EnrichmentSource = {
   rate_limit_rpm: number
   rate_limit_daily: number
   current_daily_uses: number
+  credit_usage: EnrichmentCreditUsage
   health_status: HealthStatus
   last_run_at: string | null
   created_at: string
@@ -318,12 +351,17 @@ export type EnrichmentCandidate = {
 
 export type EnrichmentCallLog = {
   provider: string
-  status: "success" | "failed" | "skipped"
+  status: "success" | "failed" | "skipped" | "degraded"
   message: string
   results: number
   contacts: number
   latency_ms: number
   verified: boolean
+  emails_found?: number
+  phones_found?: number
+  credits_remaining?: number
+  credits_quota?: number
+  errors?: string[]
   candidates?: EnrichmentCandidate[]
 }
 
@@ -390,6 +428,19 @@ export function updateEnrichmentSource(
   })
 }
 
+export function refreshEnrichmentCredits(
+  id: string,
+): Promise<{
+  success: boolean
+  message: string
+  credit_usage: EnrichmentCreditUsage
+  provider?: string
+}> {
+  return apiFetch(`/enrichment/sources/${id}/refresh-credits/`, {
+    method: "POST",
+  })
+}
+
 export type EnrichmentRunInput = {
   company_name: string
   titles?: string[]
@@ -410,6 +461,7 @@ export function fetchEnrichmentContacts(
     company?: string
     provider?: string
     verification?: string
+    search?: string
     page?: number
   } = {},
 ): Promise<EnrichedContactPage> {
@@ -417,6 +469,7 @@ export function fetchEnrichmentContacts(
   if (params.company) search.set("company", params.company)
   if (params.provider) search.set("provider", params.provider)
   if (params.verification) search.set("verification", params.verification)
+  if (params.search) search.set("search", params.search)
   if (params.page && params.page > 1) search.set("page", String(params.page))
   const qs = search.toString()
   return apiFetch<EnrichedContactPage>(`/enrichment/contacts/${qs ? `?${qs}` : ""}`)
@@ -523,6 +576,34 @@ export function enrichContactPhone(id: string): Promise<ContactPhoneResult> {
 
 export type HealthStatus = "healthy" | "degraded" | "failed" | "rate_limited"
 
+export type JobSourceCreditUsage = {
+  provider?: string
+  updated_at?: string
+  searches_remaining?: number | null
+  searches_quota?: number | null
+  searches_used?: number | null
+  plan_name?: string | null
+  plan_renewal_date?: string | null
+  extra_credits?: number | null
+  usd_remaining?: number | null
+  usd_quota?: number | null
+  usd_used?: number | null
+  compute_remaining?: number | null
+  compute_quota?: number | null
+  compute_used?: number | null
+  actor_count?: number | null
+  actor_task_count?: number | null
+  active_actor_jobs?: number | null
+  max_concurrent_actor_jobs?: number | null
+  data_transfer_used_gb?: number | null
+  data_transfer_quota_gb?: number | null
+  cycle_start?: string | null
+  cycle_end?: string | null
+  proxy_serps_remaining?: number | null
+  proxy_serps_quota?: number | null
+  proxy_serps_used?: number | null
+}
+
 export type JobSource = {
   id: string
   name: string
@@ -530,10 +611,11 @@ export type JobSource = {
   is_active: boolean
   base_url: string
   auth_configured: boolean
-  default_params: Record<string, string | number>
+  default_params: Record<string, string | number | string[]>
   rate_limit_rpm: number
   rate_limit_daily: number
   current_daily_uses: number
+  credit_usage?: JobSourceCreditUsage
   health_status: HealthStatus
   last_run_at: string | null
   created_at: string
@@ -546,7 +628,7 @@ export type JobSourceInput = {
   is_active?: boolean
   base_url?: string
   auth_config?: Record<string, string>
-  default_params?: Record<string, string | number>
+  default_params?: Record<string, string | number | string[]>
   rate_limit_rpm?: number
   rate_limit_daily?: number
 }
@@ -575,6 +657,109 @@ export type JobSourceRunInput = {
   work_mode?: string
   role?: string
   posted_within?: string
+  /** Apify-only: job boards to scrape. Ignored by SerpApi and other providers. */
+  platforms?: string[]
+}
+
+/** Platforms accepted by Apify agentx/all-jobs-scraper. */
+export const APIFY_JOB_PLATFORMS = [
+  "LinkedIn",
+  "Indeed",
+  "Naukri.com",
+  "ZipRecruiter",
+  "Jooble",
+  "France Travail",
+  "Bundesagentur für Arbeit",
+  "Glassdoor",
+  "Jobstreet",
+  "Saramin",
+  "doda",
+  "SAP",
+  "JobKorea",
+  "Mynavi Tenshoku",
+  "Pracuj.pl",
+  "HelloWork",
+  "Stepstone",
+  "InfoJobs",
+  "Talent.com",
+  "USAJOBS",
+  "Baitoru",
+  "Kariyer.net",
+  "foundit",
+  "Jobs2Careers",
+  "OnlineJobs.ph",
+  "Catho",
+  "Arbetsförmedlingen",
+  "Glints",
+  "Totaljobs",
+  "OCC",
+  "Freelancer.com",
+  "Jobright",
+  "Job Bank",
+  "jobs.ch",
+  "Bayt.com",
+  "Reed.co.uk",
+  "CV-Library",
+  "VDAB",
+  "Kyujin Box",
+] as const
+
+export const DEFAULT_APIFY_PLATFORMS = [
+  "LinkedIn",
+  "Indeed",
+  "Naukri.com",
+  "Glassdoor",
+] as const
+
+/** Boards Google Jobs reports in `via`; SerpApi has no server-side board filter. */
+export const SERPAPI_JOB_PLATFORMS = [
+  "LinkedIn",
+  "Indeed",
+  "Naukri.com",
+  "Glassdoor",
+  "Shine",
+  "foundit",
+  "TimesJobs",
+  "Monster",
+  "SimplyHired",
+  "ZipRecruiter",
+  "Dice",
+  "CareerBuilder",
+  "Jooble",
+  "Adzuna",
+  "BeBee",
+  "Built In",
+  "Talent.com",
+  "Hirist",
+  "Instahyre",
+  "Cutshort",
+  "Wellfound",
+  "Recruit.net",
+  "Jobrapido",
+  "WhatJobs",
+  "Bayt.com",
+  "Reed.co.uk",
+  "Totaljobs",
+] as const
+
+export const DEFAULT_SERPAPI_PLATFORMS = [
+  "LinkedIn",
+  "Naukri.com",
+  "Glassdoor",
+  "Shine",
+  "foundit",
+] as const
+
+export function platformsForProvider(providerCode: string): readonly string[] {
+  return providerCode.trim().toLowerCase() === "serpapi"
+    ? SERPAPI_JOB_PLATFORMS
+    : APIFY_JOB_PLATFORMS
+}
+
+export function defaultPlatformsForProvider(providerCode: string): string[] {
+  return providerCode.trim().toLowerCase() === "serpapi"
+    ? [...DEFAULT_SERPAPI_PLATFORMS]
+    : [...DEFAULT_APIFY_PLATFORMS]
 }
 
 export function fetchJobSources(): Promise<JobSource[]> {
@@ -595,6 +780,19 @@ export function updateJobSource(
   return apiFetch<JobSource>(`/admin/sources/${id}/`, {
     method: "PATCH",
     body: JSON.stringify(data),
+  })
+}
+
+export function refreshJobSourceCredits(
+  id: string,
+): Promise<{
+  success: boolean
+  message: string
+  credit_usage: JobSourceCreditUsage
+  provider?: string
+}> {
+  return apiFetch(`/admin/sources/${id}/refresh-credits/`, {
+    method: "POST",
   })
 }
 
@@ -805,6 +1003,7 @@ export function triggerManualRun(data: {
   work_mode?: string
   role?: string
   posted_within?: string
+  platforms?: string[]
 }): Promise<{ success: boolean; message: string; task_id: string; provider: string }> {
   return apiFetch("/admin/ingestion/trigger/", {
     method: "POST",
@@ -920,6 +1119,13 @@ export function deleteMasterCompany(id: string): Promise<void> {
   return apiFetch(`/admin/master-companies/${id}/`, { method: "DELETE" })
 }
 
+export function bulkDeleteMasterCompanies(ids: string[]): Promise<BulkDeleteResult> {
+  return apiFetch<BulkDeleteResult>("/admin/master-companies/bulk-delete/", {
+    method: "POST",
+    body: JSON.stringify({ ids }),
+  })
+}
+
 export function fetchMasterLocations(q?: string): Promise<MasterLocation[]> {
   const qs = q ? `?q=${encodeURIComponent(q)}` : ""
   return apiFetch<MasterLocation[]>(`/admin/master-locations/${qs}`)
@@ -946,6 +1152,13 @@ export function updateMasterLocation(
 
 export function deleteMasterLocation(id: string): Promise<void> {
   return apiFetch(`/admin/master-locations/${id}/`, { method: "DELETE" })
+}
+
+export function bulkDeleteMasterLocations(ids: string[]): Promise<BulkDeleteResult> {
+  return apiFetch<BulkDeleteResult>("/admin/master-locations/bulk-delete/", {
+    method: "POST",
+    body: JSON.stringify({ ids }),
+  })
 }
 
 export function fetchMasterRoles(): Promise<MasterJobRole[]> {
@@ -975,6 +1188,13 @@ export function deleteMasterRole(id: string): Promise<void> {
   return apiFetch(`/admin/master-roles/${id}/`, { method: "DELETE" })
 }
 
+export function bulkDeleteMasterRoles(ids: string[]): Promise<BulkDeleteResult> {
+  return apiFetch<BulkDeleteResult>("/admin/master-roles/bulk-delete/", {
+    method: "POST",
+    body: JSON.stringify({ ids }),
+  })
+}
+
 export function fetchMasterTechnologies(): Promise<MasterTechnology[]> {
   return apiFetch<MasterTechnology[]>("/admin/master-technologies/")
 }
@@ -1002,6 +1222,13 @@ export function deleteMasterTechnology(id: string): Promise<void> {
   return apiFetch(`/admin/master-technologies/${id}/`, { method: "DELETE" })
 }
 
+export function bulkDeleteMasterTechnologies(ids: string[]): Promise<BulkDeleteResult> {
+  return apiFetch<BulkDeleteResult>("/admin/master-technologies/bulk-delete/", {
+    method: "POST",
+    body: JSON.stringify({ ids }),
+  })
+}
+
 export function fetchMasterSkills(): Promise<MasterSkill[]> {
   return apiFetch<MasterSkill[]>("/admin/master-skills/")
 }
@@ -1027,6 +1254,13 @@ export function updateMasterSkill(
 
 export function deleteMasterSkill(id: string): Promise<void> {
   return apiFetch(`/admin/master-skills/${id}/`, { method: "DELETE" })
+}
+
+export function bulkDeleteMasterSkills(ids: string[]): Promise<BulkDeleteResult> {
+  return apiFetch<BulkDeleteResult>("/admin/master-skills/bulk-delete/", {
+    method: "POST",
+    body: JSON.stringify({ ids }),
+  })
 }
 
 // LLM Configuration

@@ -29,6 +29,7 @@ def seed_job_sources(apps, schema_editor):
                 'location': 'Chennai',
                 'country': 'India',
                 'max_pages': 3,
+                'platforms': ['LinkedIn', 'Indeed', 'Naukri.com', 'Glassdoor'],
             },
             'rate_limit_rpm': 30,
             'rate_limit_daily': 1000,
@@ -36,27 +37,9 @@ def seed_job_sources(apps, schema_editor):
             'is_active': False,
         },
     )
-    JobSource.objects.update_or_create(
-        provider_code='coresignal',
-        defaults={
-            'name': 'Coresignal Datasets',
-            'base_url': 'https://api.coresignal.com/cdapi',
-            'default_params': {
-                'keyword': 'Backend Engineer',
-                'location': 'India',
-                'max_pages': 2,
-            },
-            'rate_limit_rpm': 20,
-            'rate_limit_daily': 500,
-            'health_status': 'healthy',
-            'is_active': True,
-        },
-    )
-
-
 def unseed_job_sources(apps, schema_editor):
     JobSource = apps.get_model('core', 'JobSource')
-    JobSource.objects.filter(provider_code__in=['serpapi', 'apify', 'coresignal']).delete()
+    JobSource.objects.filter(provider_code__in=['serpapi', 'apify']).delete()
 
 
 class Migration(migrations.Migration):

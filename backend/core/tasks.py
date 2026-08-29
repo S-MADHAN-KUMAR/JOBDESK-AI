@@ -1,6 +1,7 @@
 """Celery tasks for the ingestion pipeline."""
 
 import logging
+import re
 from datetime import datetime, timezone
 
 from celery import shared_task
@@ -56,7 +57,7 @@ def run_scheduled_ingestion(self):
 
 
 @shared_task(bind=True, name='core.tasks.run_provider_ingestion')
-def run_provider_ingestion(self, source_id: str, keyword: str = '', location: str = '', country: str = '', max_pages: int = 1, min_salary: int = 0, max_salary: int = 0, employment_type: str = '', work_mode: str = '', role: str = '', posted_within: str = ''):
+def run_provider_ingestion(self, source_id: str, keyword: str = '', location: str = '', country: str = '', max_pages: int = 1, min_salary: int = 0, max_salary: int = 0, employment_type: str = '', work_mode: str = '', role: str = '', posted_within: str = '', platforms=None):
     """
     Run ingestion for a single provider (manual trigger).
     """
@@ -83,12 +84,17 @@ def run_provider_ingestion(self, source_id: str, keyword: str = '', location: st
         'role': role or source.default_params.get('role', ''),
         'posted_within': posted_within or source.default_params.get('posted_within', ''),
     }
+    # Apify-only; SerpApi and others ignore this key.
+    if platforms is not None:
+        filters['platforms'] = platforms
+    elif source.default_params.get('platforms'):
+        filters['platforms'] = source.default_params.get('platforms')
 
     return _run_single_provider(source, filters, task_id=self.request.id)
 
 
 @shared_task(bind=True, name='core.tasks.run_all_provider_ingestions')
-def run_all_provider_ingestions(self, keyword: str = '', location: str = '', country: str = '', max_pages: int = 1, min_salary: int = 0, max_salary: int = 0, employment_type: str = '', work_mode: str = '', role: str = '', posted_within: str = ''):
+def run_all_provider_ingestions(self, keyword: str = '', location: str = '', country: str = '', max_pages: int = 1, min_salary: int = 0, max_salary: int = 0, employment_type: str = '', work_mode: str = '', role: str = '', posted_within: str = '', platforms=None):
     """
     Run manual ingestion for all active providers using the same ad-hoc filters.
     """
@@ -116,6 +122,11 @@ def run_all_provider_ingestions(self, keyword: str = '', location: str = '', cou
             'role': role or source.default_params.get('role', ''),
             'posted_within': posted_within or source.default_params.get('posted_within', ''),
         }
+        # Only applied by ApifyProvider; other connectors ignore it.
+        if platforms is not None:
+            filters['platforms'] = platforms
+        elif source.default_params.get('platforms'):
+            filters['platforms'] = source.default_params.get('platforms')
 
         try:
             results.append(_run_single_provider(source, filters, task_id=self.request.id))
@@ -128,6 +139,106 @@ def run_all_provider_ingestions(self, keyword: str = '', location: str = '', cou
             })
 
     return results
+
+
+def _source_max_results(source: JobSource) -> int:
+    """Authoritative job-count cap from Source Management."""
+    params = source.default_params or {}
+    for key in ("max_results", "max_pages"):
+        raw = params.get(key)
+        if raw in (None, "", 0, "0"):
+            continue
+        try:
+            return max(1, int(raw))
+        except (TypeError, ValueError):
+            continue
+    return 10
+
+
+def _platform_key(name) -> str:
+    """Compare board names across providers ("Naukri.com" == "Naukri")."""
+    slug = re.sub(r"[^a-z0-9]+", "", str(name).lower())
+    for suffix in ("couk", "com", "net", "org", "ph", "ch"):
+        if len(slug) > len(suffix) + 2 and slug.endswith(suffix):
+            return slug[: -len(suffix)]
+    return slug
+
+
+def _supported_platforms(provider_code: str) -> list:
+    if provider_code == "serpapi":
+        from core.providers.serpapi import SERPAPI_JOB_PLATFORMS
+
+        return list(SERPAPI_JOB_PLATFORMS)
+    if provider_code == "apify":
+        from core.providers.apify import SUPPORTED_PLATFORMS
+
+        return list(SUPPORTED_PLATFORMS)
+    return []
+
+
+def _sanitize_platforms(source: JobSource, requested) -> list:
+    """Keep only platforms the target provider understands.
+
+    A shared schedule may send one platform list to every provider, and board
+    names differ per provider ("Naukri.com" vs "Naukri"). Matching on a
+    normalized key avoids silently filtering every result away.
+    """
+    supported = _supported_platforms(source.provider_code)
+    if not supported:
+        return []
+    by_key = {_platform_key(name): name for name in supported}
+
+    if isinstance(requested, str):
+        requested = [part.strip() for part in requested.split(",") if part.strip()]
+    if not isinstance(requested, list):
+        requested = []
+
+    matched = []
+    for item in requested:
+        canonical = by_key.get(_platform_key(item))
+        if canonical and canonical not in matched:
+            matched.append(canonical)
+    if matched:
+        return matched
+
+    configured = (source.default_params or {}).get("platforms")
+    if isinstance(configured, list) and configured != requested:
+        return _sanitize_platforms(source, configured)
+    return []
+
+
+def _apply_source_result_cap(source: JobSource, filters: dict) -> dict:
+    """Force filters to respect the provider's configured Max results.
+
+    Manual/schedule runs may pass their own max_pages; that value may only
+    go *lower* than Source Management, never higher.
+    """
+    capped = dict(filters or {})
+    source_cap = _source_max_results(source)
+    requested = None
+    for key in ("max_results", "max_pages"):
+        raw = capped.get(key)
+        if raw in (None, "", 0, "0"):
+            continue
+        try:
+            requested = max(1, int(raw))
+            break
+        except (TypeError, ValueError):
+            continue
+    final = min(requested, source_cap) if requested is not None else source_cap
+    capped["max_results"] = final
+    # Prevent providers that still read max_pages from treating a higher
+    # schedule/UI value as page count or job count.
+    capped["max_pages"] = final
+    requested_platforms = capped.get("platforms")
+    if requested_platforms in (None, "", []):
+        requested_platforms = (source.default_params or {}).get("platforms")
+    platforms = _sanitize_platforms(source, requested_platforms)
+    if platforms:
+        capped["platforms"] = platforms
+    else:
+        capped.pop("platforms", None)
+    return capped
 
 
 def _run_single_provider(source: JobSource, filters: dict = None, task_id: str = ''):
@@ -152,6 +263,16 @@ def _run_single_provider(source: JobSource, filters: dict = None, task_id: str =
             'role': source.default_params.get('role', ''),
             'posted_within': source.default_params.get('posted_within', ''),
         }
+        if source.default_params.get('platforms'):
+            filters['platforms'] = source.default_params.get('platforms')
+
+    filters = _apply_source_result_cap(source, filters)
+    logger.info(
+        "Ingestion %s capped at max_results=%s platforms=%s",
+        source.provider_code,
+        filters.get("max_results"),
+        filters.get("platforms"),
+    )
 
     run = IngestionRun.objects.create(
         provider=source,
@@ -169,6 +290,10 @@ def _run_single_provider(source: JobSource, filters: dict = None, task_id: str =
     try:
         provider = get_provider(source)
         raw_records = provider.search_jobs(filters)
+        # Final safety net: never store more than Source Management allows.
+        cap = int(filters.get("max_results") or _source_max_results(source))
+        if len(raw_records) > cap:
+            raw_records = raw_records[:cap]
 
         for record in raw_records:
             try:
@@ -213,6 +338,10 @@ def _run_single_provider(source: JobSource, filters: dict = None, task_id: str =
             health_status=JobSource.HealthStatus.HEALTHY,
             last_run_at=now,
         )
+        try:
+            provider.persist_credit_usage()
+        except Exception:  # noqa: BLE001
+            pass
 
         return {
             'success': True,

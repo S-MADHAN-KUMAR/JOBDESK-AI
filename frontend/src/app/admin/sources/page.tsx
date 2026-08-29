@@ -7,10 +7,12 @@ import {
   Activity,
   Cable,
   Clock,
+  Coins,
   Gauge,
   KeyRound,
   Loader2,
   Plus,
+  RefreshCw,
   Settings2,
   ShieldAlert,
   Trash2,
@@ -24,6 +26,7 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card"
+import { Skeleton } from "@/components/ui/skeleton"
 import {
   Dialog,
   DialogContent,
@@ -35,14 +38,20 @@ import {
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { AppShell } from "@/components/app-shell"
+import { PageHeader, EmptyState } from "@/components/page-header"
 import { cn } from "@/lib/utils"
+import { toast } from "sonner"
 import { useProfile, useJobSources } from "@/lib/hooks"
 import {
   type HealthStatus,
   type JobSource,
   type JobSourceInput,
+  DEFAULT_APIFY_PLATFORMS,
+  platformsForProvider,
+  defaultPlatformsForProvider,
   createJobSource,
   updateJobSource,
+  refreshJobSourceCredits,
 } from "@/lib/api"
 
 const HEALTH_META: Record<
@@ -81,6 +90,7 @@ type FormState = {
   location: string
   country: string
   max_pages: string
+  platforms: string[]
 }
 
 const emptyForm: FormState = {
@@ -93,6 +103,50 @@ const emptyForm: FormState = {
   location: "",
   country: "India",
   max_pages: "5",
+  platforms: [...DEFAULT_APIFY_PLATFORMS],
+}
+
+function formatCredit(value: number | null | undefined, decimals = 0): string {
+  if (value === null || value === undefined) return "—"
+  if (decimals > 0) {
+    return Number(value).toLocaleString(undefined, {
+      minimumFractionDigits: 0,
+      maximumFractionDigits: decimals,
+    })
+  }
+  return Number(value).toLocaleString()
+}
+
+/** "Naukri" and "Naukri.com" name the same board across providers. */
+function platformKey(name: string): string {
+  const slug = name.toLowerCase().replace(/[^a-z0-9]/g, "")
+  for (const suffix of ["couk", "com", "net", "org"]) {
+    if (slug.length > suffix.length + 2 && slug.endsWith(suffix)) {
+      return slug.slice(0, -suffix.length)
+    }
+  }
+  return slug
+}
+
+function parsePlatforms(raw: unknown, providerCode = "apify"): string[] {
+  const allowed = new Map(
+    platformsForProvider(providerCode).map((name) => [platformKey(name), name]),
+  )
+  const fallback = defaultPlatformsForProvider(providerCode)
+  let candidates: string[] = []
+  if (Array.isArray(raw)) {
+    candidates = raw.map(String)
+  } else if (typeof raw === "string" && raw.trim()) {
+    candidates = raw.split(",").map((p) => p.trim())
+  } else {
+    return fallback
+  }
+  const selected: string[] = []
+  for (const candidate of candidates) {
+    const canonical = allowed.get(platformKey(candidate))
+    if (canonical && !selected.includes(canonical)) selected.push(canonical)
+  }
+  return selected.length > 0 ? selected : fallback
 }
 
 function formFromSource(source: JobSource): FormState {
@@ -107,20 +161,34 @@ function formFromSource(source: JobSource): FormState {
     location: String(params.location ?? ""),
     country: String(params.country ?? "India"),
     max_pages: String(params.max_pages ?? ""),
+    platforms: parsePlatforms(params.platforms, source.provider_code),
   }
 }
 
 function formToInput(form: FormState): JobSourceInput {
-  const default_params: Record<string, string | number> = {
+  const provider = form.provider_code.trim().toLowerCase()
+  const default_params: Record<string, string | number | string[]> = {
     max_pages: Math.max(1, Number(form.max_pages) || 1),
   }
   if (form.keyword.trim()) default_params.keyword = form.keyword.trim()
   if (form.location.trim()) default_params.location = form.location.trim()
   if (form.country.trim()) default_params.country = form.country.trim()
+  if (provider === "apify" || provider === "serpapi") {
+    const allowed = new Map(
+      platformsForProvider(provider).map((name) => [platformKey(name), name]),
+    )
+    const cleaned: string[] = []
+    for (const item of form.platforms) {
+      const canonical = allowed.get(platformKey(item))
+      if (canonical && !cleaned.includes(canonical)) cleaned.push(canonical)
+    }
+    default_params.platforms =
+      cleaned.length > 0 ? cleaned : defaultPlatformsForProvider(provider)
+  }
 
   return {
     name: form.name.trim(),
-    provider_code: form.provider_code.trim().toLowerCase(),
+    provider_code: provider,
     base_url: form.base_url.trim(),
     rate_limit_rpm: Math.max(1, Number(form.rate_limit_rpm) || 60),
     rate_limit_daily: Math.max(1, Number(form.rate_limit_daily) || 1000),
@@ -132,7 +200,6 @@ export default function AdminSourcesPage() {
   const router = useRouter()
   const { data: me, isLoading: profileLoading, error: profileError } = useProfile()
   const { data: sources = [], isLoading: sourcesLoading, refetch: refetchSources } = useJobSources()
-  const [error, setError] = useState<string | null>(null)
 
   const [formOpen, setFormOpen] = useState(false)
   const [editing, setEditing] = useState<JobSource | null>(null)
@@ -145,6 +212,7 @@ export default function AdminSourcesPage() {
 
   const [deleteTarget, setDeleteTarget] = useState<JobSource | null>(null)
   const [deleting, setDeleting] = useState(false)
+  const [refreshingCredits, setRefreshingCredits] = useState<string | null>(null)
 
   useEffect(() => {
     if (profileError) router.push("/login")
@@ -165,29 +233,47 @@ export default function AdminSourcesPage() {
   async function saveForm(e: React.FormEvent) {
     e.preventDefault()
     setSaving(true)
-    setError(null)
     try {
       if (editing) {
         await updateJobSource(editing.id, formToInput(form))
+        toast.success("Provider updated successfully.")
       } else {
         await createJobSource(formToInput(form))
+        toast.success("Provider created successfully.")
       }
       setFormOpen(false)
       refetchSources()
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to save provider")
+      toast.error(err instanceof Error ? err.message : "Failed to save provider")
     } finally {
       setSaving(false)
     }
   }
 
   async function toggleActive(source: JobSource) {
-    setError(null)
     try {
       await updateJobSource(source.id, { is_active: !source.is_active })
       refetchSources()
+      toast.success(source.is_active ? "Provider disabled." : "Provider enabled.")
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to toggle provider")
+      toast.error(err instanceof Error ? err.message : "Failed to toggle provider")
+    }
+  }
+
+  async function refreshCredits(source: JobSource) {
+    setRefreshingCredits(source.id)
+    try {
+      const result = await refreshJobSourceCredits(source.id)
+      if (!result.success) {
+        toast.error(result.message || "Failed to refresh credits")
+      } else {
+        toast.success(result.message || "Credits refreshed.")
+      }
+      refetchSources()
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Failed to refresh credits")
+    } finally {
+      setRefreshingCredits(null)
     }
   }
 
@@ -195,7 +281,6 @@ export default function AdminSourcesPage() {
     e.preventDefault()
     if (!credTarget) return
     setSavingCreds(true)
-    setError(null)
     try {
       await updateJobSource(credTarget.id, {
         auth_config: { api_key: apiKey.trim() },
@@ -203,8 +288,9 @@ export default function AdminSourcesPage() {
       setCredTarget(null)
       setApiKey("")
       refetchSources()
+      toast.success("Credentials saved.")
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to save credentials")
+      toast.error(err instanceof Error ? err.message : "Failed to save credentials")
     } finally {
       setSavingCreds(false)
     }
@@ -213,13 +299,13 @@ export default function AdminSourcesPage() {
   async function confirmDelete() {
     if (!deleteTarget) return
     setDeleting(true)
-    setError(null)
     try {
       await updateJobSource(deleteTarget.id, { is_active: false })
       setDeleteTarget(null)
       refetchSources()
+      toast.success("Provider disabled.")
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to disable provider")
+      toast.error(err instanceof Error ? err.message : "Failed to disable provider")
     } finally {
       setDeleting(false)
     }
@@ -229,44 +315,63 @@ export default function AdminSourcesPage() {
 
   return (
     <AppShell user={me} loading={profileLoading}>
-      <div className="p-4 sm:p-6 space-y-6">
-        <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
-          <div>
-            <h1 className="text-2xl font-bold tracking-tight text-foreground">
-              Source Management
-            </h1>
-            <p className="text-sm text-muted-foreground">
-              Configure job-source connectors, credentials, and rate limits
-            </p>
-          </div>
-          <Button onClick={openCreate} data-icon="inline-start">
-            <Plus data-icon="inline-start" />
-            Add new provider
-          </Button>
-        </div>
+      <div className="space-y-6 p-4 sm:p-6">
+        <PageHeader
+          variant="banner"
+          icon={Cable}
+          title="Source Management"
+          description="Configure job-source connectors, credentials, rate limits, and live API credits."
+          actions={
+            <Button
+              variant="outline"
+              onClick={openCreate}
+              data-icon="inline-start"
+              className="border-white/40 bg-transparent text-white hover:bg-white/10 hover:text-white"
+            >
+              <Plus data-icon="inline-start" />
+              Add provider
+            </Button>
+          }
+        />
 
-        {error && (
-          <div className="rounded-lg border border-destructive/30 bg-destructive/5 px-4 py-3 text-sm text-destructive">
-            {error}
+        {sourcesLoading ? (
+          <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
+            {Array.from({ length: 3 }).map((_, i) => (
+              <Card key={i} className="flex flex-col">
+                <CardHeader className="space-y-3 p-4">
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="min-w-0 flex-1 space-y-2">
+                      <Skeleton className="h-5 w-40" />
+                      <Skeleton className="h-4 w-24" />
+                    </div>
+                    <Skeleton className="h-6 w-10 rounded-full" />
+                  </div>
+                </CardHeader>
+                <CardContent className="flex flex-1 flex-col gap-3 p-4 pt-0">
+                  <Skeleton className="h-3 w-full" />
+                  <Skeleton className="h-3 w-3/4" />
+                  <div className="mt-auto grid grid-cols-2 gap-2 pt-2">
+                    <Skeleton className="h-9 w-full" />
+                    <Skeleton className="h-9 w-full" />
+                  </div>
+                </CardContent>
+              </Card>
+            ))}
           </div>
-        )}
-
-        {sources.length === 0 ? (
+        ) : sources.length === 0 ? (
           <Card>
-            <CardContent className="flex flex-col items-center justify-center gap-3 px-4 py-16 text-center">
-              <span className="flex size-12 items-center justify-center rounded-full bg-muted text-muted-foreground">
-                <Cable className="size-6" />
-              </span>
-              <div>
-                <p className="font-medium">No providers configured</p>
-                <p className="text-sm text-muted-foreground">
-                  Add your first job-source connector to get started.
-                </p>
-              </div>
-              <Button onClick={openCreate} data-icon="inline-start">
-                <Plus data-icon="inline-start" />
-                Add new provider
-              </Button>
+            <CardContent className="p-0">
+              <EmptyState
+                icon={Cable}
+                title="No providers configured"
+                description="Add your first job-source connector to get started."
+                action={
+                  <Button onClick={openCreate} data-icon="inline-start">
+                    <Plus data-icon="inline-start" />
+                    Add provider
+                  </Button>
+                }
+              />
             </CardContent>
           </Card>
         ) : (
@@ -379,6 +484,154 @@ export default function AdminSourcesPage() {
                     </div>
 
                     <div className="rounded-lg border p-3 text-sm">
+                      <div className="flex items-center justify-between gap-2">
+                        <p className="flex items-center gap-1.5 text-xs font-medium text-muted-foreground">
+                          <Coins className="size-3.5" />
+                          Remaining credits
+                        </p>
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          className="h-7 px-2 text-xs"
+                          disabled={
+                            !source.auth_configured ||
+                            refreshingCredits === source.id
+                          }
+                          onClick={() => void refreshCredits(source)}
+                          data-icon="inline-start"
+                        >
+                          {refreshingCredits === source.id ? (
+                            <Loader2 className="size-3.5 animate-spin" />
+                          ) : (
+                            <RefreshCw className="size-3.5" />
+                          )}
+                          Refresh
+                        </Button>
+                      </div>
+                      {source.provider_code === "serpapi" ? (
+                        <div className="mt-2 grid grid-cols-2 gap-2 text-sm">
+                          <div>
+                            <p className="text-[11px] text-muted-foreground">
+                              Searches left
+                            </p>
+                            <p className="font-semibold">
+                              {formatCredit(source.credit_usage?.searches_remaining)}
+                              {source.credit_usage?.searches_quota != null && (
+                                <span className="text-xs font-normal text-muted-foreground">
+                                  {" "}
+                                  / {formatCredit(source.credit_usage.searches_quota)}
+                                </span>
+                              )}
+                            </p>
+                          </div>
+                          <div>
+                            <p className="text-[11px] text-muted-foreground">
+                              Used this month
+                            </p>
+                            <p className="font-semibold">
+                              {formatCredit(source.credit_usage?.searches_used)}
+                            </p>
+                          </div>
+                          {source.credit_usage?.plan_name && (
+                            <div className="col-span-2">
+                              <p className="text-[11px] text-muted-foreground">
+                                Plan
+                              </p>
+                              <p className="truncate font-medium">
+                                {source.credit_usage.plan_name}
+                                {source.credit_usage.plan_renewal_date
+                                  ? ` · renews ${source.credit_usage.plan_renewal_date}`
+                                  : ""}
+                              </p>
+                            </div>
+                          )}
+                        </div>
+                      ) : source.provider_code === "apify" ? (
+                        <div className="mt-2 grid grid-cols-2 gap-2 text-sm">
+                          <div>
+                            <p className="text-[11px] text-muted-foreground">
+                              USD left
+                            </p>
+                            <p className="font-semibold">
+                              ${formatCredit(source.credit_usage?.usd_remaining, 2)}
+                              {source.credit_usage?.usd_quota != null && (
+                                <span className="text-xs font-normal text-muted-foreground">
+                                  {" "}
+                                  / ${formatCredit(source.credit_usage.usd_quota, 2)}
+                                </span>
+                              )}
+                            </p>
+                            {source.credit_usage?.usd_used != null && (
+                              <p className="text-[11px] text-muted-foreground">
+                                Used ${formatCredit(source.credit_usage.usd_used, 2)}
+                              </p>
+                            )}
+                          </div>
+                          <div>
+                            <p className="text-[11px] text-muted-foreground">
+                              Compute units left
+                            </p>
+                            <p className="font-semibold">
+                              {formatCredit(source.credit_usage?.compute_remaining, 2)}
+                              {source.credit_usage?.compute_quota != null && (
+                                <span className="text-xs font-normal text-muted-foreground">
+                                  {" "}
+                                  / {formatCredit(source.credit_usage.compute_quota, 2)}
+                                </span>
+                              )}
+                            </p>
+                            {source.credit_usage?.compute_used != null && (
+                              <p className="text-[11px] text-muted-foreground">
+                                Used {formatCredit(source.credit_usage.compute_used, 2)} CU
+                              </p>
+                            )}
+                          </div>
+                          {(source.credit_usage?.actor_count != null ||
+                            source.credit_usage?.active_actor_jobs != null) && (
+                            <div className="col-span-2">
+                              <p className="text-[11px] text-muted-foreground">
+                                Actors
+                              </p>
+                              <p className="font-medium">
+                                {formatCredit(source.credit_usage?.actor_count)} actors
+                                {source.credit_usage?.actor_task_count != null &&
+                                  ` · ${formatCredit(source.credit_usage.actor_task_count)} tasks`}
+                                {source.credit_usage?.active_actor_jobs != null &&
+                                  ` · ${formatCredit(source.credit_usage.active_actor_jobs)} active`}
+                              </p>
+                            </div>
+                          )}
+                          {source.credit_usage?.cycle_end && (
+                            <div className="col-span-2">
+                              <p className="text-[11px] text-muted-foreground">
+                                Billing cycle ends{" "}
+                                {new Date(
+                                  source.credit_usage.cycle_end,
+                                ).toLocaleDateString()}
+                              </p>
+                            </div>
+                          )}
+                        </div>
+                      ) : (
+                        <p className="mt-2 text-[11px] text-muted-foreground">
+                          Credit tracking not available for this provider
+                        </p>
+                      )}
+                      {source.credit_usage?.updated_at ? (
+                        <p className="mt-2 text-[11px] text-muted-foreground">
+                          Updated{" "}
+                          {new Date(source.credit_usage.updated_at).toLocaleString()}
+                        </p>
+                      ) : (
+                        <p className="mt-2 text-[11px] text-muted-foreground">
+                          {source.auth_configured
+                            ? "Click Refresh to pull live credits"
+                            : "Add API key, then refresh credits"}
+                        </p>
+                      )}
+                    </div>
+
+                    <div className="rounded-lg border p-3 text-sm">
                       <p className="text-xs font-medium text-muted-foreground">
                         Target defaults
                       </p>
@@ -390,6 +643,17 @@ export default function AdminSourcesPage() {
                         <span className="font-medium">Location:</span>{" "}
                         {source.default_params.location || "—"}
                       </p>
+                      {(source.provider_code === "apify" ||
+                        source.provider_code === "serpapi") && (
+                        <p className="mt-1 text-xs text-muted-foreground">
+                          Platforms:{" "}
+                          {Array.isArray(source.default_params.platforms)
+                            ? source.default_params.platforms.join(", ")
+                            : defaultPlatformsForProvider(
+                                source.provider_code,
+                              ).join(", ")}
+                        </p>
+                      )}
                     </div>
 
                     <div className="mt-auto flex flex-wrap items-center gap-2 pt-1">
@@ -468,9 +732,14 @@ export default function AdminSourcesPage() {
                   <Input
                     id="source-code"
                     value={form.provider_code}
-                    onChange={(e) =>
-                      setForm({ ...form, provider_code: e.target.value })
-                    }
+                    onChange={(e) => {
+                      const code = e.target.value
+                      setForm({
+                        ...form,
+                        provider_code: code,
+                        platforms: defaultPlatformsForProvider(code),
+                      })
+                    }}
                     placeholder="e.g. serpapi"
                     disabled={editing !== null}
                     required
@@ -560,12 +829,116 @@ export default function AdminSourcesPage() {
                   />
                 </div>
               </div>
+              {(form.provider_code.trim().toLowerCase() === "apify" ||
+                form.provider_code.trim().toLowerCase() === "serpapi") && (
+                <div className="flex flex-col gap-2">
+                  <div className="flex items-center justify-between gap-2">
+                    <Label>
+                      {form.provider_code.trim().toLowerCase() === "serpapi"
+                        ? "SerpApi job platforms"
+                        : "Apify job platforms"}
+                    </Label>
+                    <div className="flex gap-2">
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="sm"
+                        onClick={() =>
+                          setForm({
+                            ...form,
+                            platforms: [
+                              ...platformsForProvider(form.provider_code),
+                            ],
+                          })
+                        }
+                      >
+                        Select all
+                      </Button>
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="sm"
+                        onClick={() =>
+                          setForm({
+                            ...form,
+                            platforms: defaultPlatformsForProvider(
+                              form.provider_code,
+                            ),
+                          })
+                        }
+                      >
+                        Defaults
+                      </Button>
+                    </div>
+                  </div>
+                  <p className="text-xs text-muted-foreground">
+                    {form.provider_code.trim().toLowerCase() === "serpapi"
+                      ? "Only boards Google Jobs reports in via. Indeed/Naukri may be sparse for India queries."
+                      : "Boards supported by the Apify all-jobs scraper."}
+                  </p>
+                  <div className="max-h-48 overflow-y-auto rounded-lg border p-3">
+                    <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+                      {platformsForProvider(form.provider_code).map((platform) => {
+                        const checked = form.platforms.some(
+                          (p) => platformKey(p) === platformKey(platform),
+                        )
+                        return (
+                          <label
+                            key={platform}
+                            className="flex cursor-pointer items-center gap-2 text-sm"
+                          >
+                            <input
+                              type="checkbox"
+                              checked={checked}
+                              onChange={() => {
+                                setForm({
+                                  ...form,
+                                  platforms: checked
+                                    ? form.platforms.filter(
+                                        (p) =>
+                                          platformKey(p) !==
+                                          platformKey(platform),
+                                      )
+                                    : [...form.platforms, platform],
+                                })
+                              }}
+                              className="size-4 accent-primary"
+                            />
+                            {platform}
+                          </label>
+                        )
+                      })}
+                    </div>
+                  </div>
+                  <p className="text-xs text-muted-foreground">
+                    {
+                      form.platforms.filter((p) =>
+                        platformsForProvider(form.provider_code).some(
+                          (allowed) =>
+                            platformKey(allowed) === platformKey(p),
+                        ),
+                      ).length
+                    }{" "}
+                    platform
+                    {form.platforms.length === 1 ? "" : "s"} selected
+                  </p>
+                </div>
+              )}
             </div>
             <DialogFooter>
               <Button type="button" variant="outline" onClick={() => setFormOpen(false)}>
                 Cancel
               </Button>
-              <Button type="submit" disabled={saving} data-icon="inline-start">
+              <Button
+                type="submit"
+                disabled={
+                  saving ||
+                  ((form.provider_code.trim().toLowerCase() === "apify" ||
+                    form.provider_code.trim().toLowerCase() === "serpapi") &&
+                    form.platforms.length === 0)
+                }
+                data-icon="inline-start"
+              >
                 {saving && <Loader2 className="animate-spin" data-icon="inline-start" />}
                 {saving ? "Saving..." : editing ? "Save changes" : "Create provider"}
               </Button>

@@ -11,6 +11,7 @@ import {
   ChevronUp,
   Database,
   Eye,
+  GitBranch,
   Info,
   Loader2,
   RefreshCw,
@@ -54,6 +55,8 @@ import {
   TableRow,
 } from "@/components/ui/table"
 import { AppShell } from "@/components/app-shell"
+import { PageHeader } from "@/components/page-header"
+import { toast } from "sonner"
 import {
   fetchPipelineHealth,
   type PipelineHealth,
@@ -109,7 +112,6 @@ export default function AdminPipelinePage() {
   const router = useRouter()
   const { data: me, isLoading: profileLoading, error: profileError } = useProfile()
   const [loading, setLoading] = useState(true)
-  const [error, setError] = useState<string | null>(null)
   const [reloadKey, setReloadKey] = useState(0)
 
   const [tab, setTab] = useState<Tab>("pipeline")
@@ -123,19 +125,18 @@ export default function AdminPipelinePage() {
   const [rawSearch, setRawSearch] = useState("")
   const [rawResult, setRawResult] = useState<RawVsNormalized | null>(null)
   const [rawLoading, setRawLoading] = useState(false)
-  const [rawError, setRawError] = useState<string | null>(null)
 
   const [snapshotLoading, setSnapshotLoading] = useState(false)
   const [expandedJob, setExpandedJob] = useState<string | null>(null)
 
   const [purgeOpen, setPurgeOpen] = useState(false)
   const [purging, setPurging] = useState(false)
+  const [purgeConfirm, setPurgeConfirm] = useState("")
 
   const [llmConfig, setLlmConfig] = useState<LLMConfig | null>(null)
   const [llmProvider, setLlmProvider] = useState("none")
   const [llmModel, setLlmModel] = useState("")
   const [llmSaving, setLlmSaving] = useState(false)
-  const [llmMessage, setLlmMessage] = useState<string | null>(null)
 
   function refresh() {
     setReloadKey((k) => k + 1)
@@ -155,7 +156,7 @@ export default function AdminPipelinePage() {
     async function run() {
       try {
         if (!me || me.role !== "ADMIN") {
-          setError("Access denied: Admin role required.")
+          toast.error("Access denied: Admin role required.")
           return
         }
 
@@ -176,7 +177,7 @@ export default function AdminPipelinePage() {
         }
       } catch (err) {
         if (cancelled) return
-        setError(err instanceof Error ? err.message : "Failed to load pipeline data")
+        toast.error(err instanceof Error ? err.message : "Failed to load pipeline data")
       } finally {
         if (!cancelled) setLoading(false)
       }
@@ -197,7 +198,7 @@ export default function AdminPipelinePage() {
         if (!cancelled) setMovements(res.movements)
       })
       .catch((err) => {
-        if (!cancelled) setError(err instanceof Error ? err.message : "Failed to load movements")
+        if (!cancelled) toast.error(err instanceof Error ? err.message : "Failed to load movements")
       })
 
     return () => {
@@ -210,13 +211,12 @@ export default function AdminPipelinePage() {
     const id = rawSearch.trim()
     if (!id) return
     setRawLoading(true)
-    setRawError(null)
     setRawResult(null)
     try {
       const result = await fetchRawVsNormalized(id)
       setRawResult(result)
     } catch (err) {
-      setRawError(err instanceof Error ? err.message : "Job not found")
+      toast.error(err instanceof Error ? err.message : "Job not found")
     } finally {
       setRawLoading(false)
     }
@@ -224,26 +224,31 @@ export default function AdminPipelinePage() {
 
   async function handleSnapshot() {
     setSnapshotLoading(true)
-    setError(null)
     try {
       await triggerSnapshot()
       refresh()
+      toast.success("Snapshot triggered.")
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Snapshot trigger failed")
+      toast.error(err instanceof Error ? err.message : "Snapshot trigger failed")
     } finally {
       setSnapshotLoading(false)
     }
   }
 
   async function handlePurge() {
+    if (purgeConfirm !== "CONFIRM_PURGE") {
+      toast.error("Type CONFIRM_PURGE exactly to proceed.")
+      return
+    }
     setPurging(true)
-    setError(null)
     try {
       await purgeAllIngestionData()
       setPurgeOpen(false)
+      setPurgeConfirm("")
       refresh()
+      toast.success("All ingestion data purged.")
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Purge failed")
+      toast.error(err instanceof Error ? err.message : "Purge failed")
     } finally {
       setPurging(false)
     }
@@ -251,12 +256,11 @@ export default function AdminPipelinePage() {
 
   async function handleSaveLLM() {
     setLlmSaving(true)
-    setLlmMessage(null)
     try {
       await updateLLMConfig({ provider: llmProvider, model: llmModel })
-      setLlmMessage("LLM config saved. Restart the backend for changes to take effect.")
+      toast.success("LLM config saved. Restart the backend for changes to take effect.")
     } catch (err) {
-      setLlmMessage(err instanceof Error ? err.message : "Failed to save LLM config")
+      toast.error(err instanceof Error ? err.message : "Failed to save LLM config")
     } finally {
       setLlmSaving(false)
     }
@@ -264,68 +268,51 @@ export default function AdminPipelinePage() {
 
   if (!me) return null
 
-  if (profileError) {
-    return (
-      <AppShell user={me} loading>
-        <div className="p-6">
-          <div className="rounded-lg border border-destructive/30 bg-destructive/5 px-4 py-3 text-sm text-destructive">
-            Access denied: Admin role required.
-          </div>
-        </div>
-      </AppShell>
-    )
-  }
-
   return (
     <AppShell user={me} loading={loading}>
-      <div className="p-4 sm:p-6 space-y-6">
-        <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
-          <div>
-            <h1 className="text-2xl font-bold tracking-tight text-foreground">
-              Pipeline Health &amp; Data Quality
-            </h1>
-            <p className="text-sm text-muted-foreground">
-              Monitor ingestion pipeline, data quality metrics, and confidence scores
-            </p>
-          </div>
-          <div className="flex items-center gap-2">
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={refresh}
-              data-icon="inline-start"
-            >
-              <RefreshCw data-icon="inline-start" />
-              Refresh
-            </Button>
-            <Button
-              size="sm"
-              onClick={handleSnapshot}
-              disabled={snapshotLoading}
-              data-icon="inline-start"
-            >
-              {snapshotLoading && <Loader2 className="animate-spin" data-icon="inline-start" />}
-              {snapshotLoading ? "Triggering..." : "Trigger Snapshot"}
-            </Button>
-            <Button
-              size="sm"
-              variant="destructive"
-              onClick={() => setPurgeOpen(true)}
-              data-icon="inline-start"
-            >
-              <Trash2 data-icon="inline-start" />
-              Purge All Data
-            </Button>
-          </div>
-        </div>
+      <div className="space-y-6 p-4 sm:p-6">
+        <PageHeader
+          variant="banner"
+          icon={GitBranch}
+          title="Pipeline Health & Data Quality"
+          description="Monitor ingestion health, quality metrics, confidence scores, and LLM settings."
+          actions={
+            <div className="flex items-center gap-2">
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={refresh}
+                data-icon="inline-start"
+                className="border-white/40 bg-transparent text-white hover:bg-white/10 hover:text-white"
+              >
+                <RefreshCw data-icon="inline-start" />
+                Refresh
+              </Button>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={handleSnapshot}
+                disabled={snapshotLoading}
+                data-icon="inline-start"
+                className="border-white/40 bg-transparent text-white hover:bg-white/10 hover:text-white"
+              >
+                {snapshotLoading && <Loader2 className="animate-spin" data-icon="inline-start" />}
+                {snapshotLoading ? "Triggering..." : "Trigger Snapshot"}
+              </Button>
+              <Button
+                size="sm"
+                variant="destructive"
+                onClick={() => setPurgeOpen(true)}
+                data-icon="inline-start"
+              >
+                <Trash2 data-icon="inline-start" />
+                Purge All Data
+              </Button>
+            </div>
+          }
+        />
 
-        {error && (
-          <div className="rounded-lg border border-destructive/30 bg-destructive/5 px-4 py-3 text-sm text-destructive">
-            {error}
-          </div>
-        )}
-
-        <div className="flex flex-wrap gap-1 rounded-lg border bg-muted p-1">
+        <div className="flex flex-wrap gap-1 rounded-lg border bg-muted/60 p-1">
           {TABS.map((t) => {
             const Icon = t.icon
             return (
@@ -739,12 +726,6 @@ export default function AdminPipelinePage() {
               </CardContent>
             </Card>
 
-            {rawError && (
-              <div className="rounded-lg border border-destructive/30 bg-destructive/5 px-4 py-3 text-sm text-destructive">
-                {rawError}
-              </div>
-            )}
-
             {rawResult && (
               <div className="space-y-4">
                 <Card>
@@ -1090,18 +1071,6 @@ export default function AdminPipelinePage() {
                     </Select>
                   </div>
                 </div>
-                {llmMessage && (
-                  <div
-                    className={cn(
-                      "rounded-lg border px-4 py-3 text-sm",
-                      llmMessage.includes("saved")
-                        ? "border-emerald-500/30 bg-emerald-500/5 text-emerald-700 dark:text-emerald-400"
-                        : "border-destructive/30 bg-destructive/5 text-destructive",
-                    )}
-                  >
-                    {llmMessage}
-                  </div>
-                )}
                 <div className="flex justify-end">
                   <Button onClick={handleSaveLLM} disabled={llmSaving} data-icon="inline-start">
                     {llmSaving && <Loader2 className="animate-spin" data-icon="inline-start" />}
@@ -1116,28 +1085,49 @@ export default function AdminPipelinePage() {
 
       <Dialog
         open={purgeOpen}
-        onOpenChange={(open) => !open && setPurgeOpen(false)}
+        onOpenChange={(open) => {
+          if (!open) {
+            setPurgeOpen(false)
+            setPurgeConfirm("")
+          }
+        }}
       >
         <DialogContent>
           <DialogHeader>
             <DialogTitle className="text-destructive">Purge All Ingestion Data</DialogTitle>
             <DialogDescription>
-              This will <strong>permanently delete</strong> ALL ingestion pipeline data:
+              This will permanently delete ALL ingestion pipeline data:
               raw jobs, canonical jobs, source records, classifications, snapshots,
               demand movements, and employer scores. This action cannot be undone.
             </DialogDescription>
           </DialogHeader>
-          <div className="rounded-lg border border-destructive/30 bg-destructive/5 p-3 text-sm text-destructive">
-            Type <strong>CONFIRM_PURGE</strong> in the box below to proceed.
+          <div className="flex flex-col gap-3">
+            <div className="rounded-lg border border-destructive/30 bg-destructive/5 p-3 text-sm text-destructive">
+              Type <strong>CONFIRM_PURGE</strong> below to proceed.
+            </div>
+            <Input
+              value={purgeConfirm}
+              onChange={(e) => setPurgeConfirm(e.target.value)}
+              placeholder="CONFIRM_PURGE"
+              autoComplete="off"
+              disabled={purging}
+            />
           </div>
           <DialogFooter>
-            <Button variant="outline" onClick={() => setPurgeOpen(false)}>
+            <Button
+              variant="outline"
+              onClick={() => {
+                setPurgeOpen(false)
+                setPurgeConfirm("")
+              }}
+              disabled={purging}
+            >
               Cancel
             </Button>
             <Button
               variant="destructive"
-              onClick={handlePurge}
-              disabled={purging}
+              onClick={() => void handlePurge()}
+              disabled={purging || purgeConfirm !== "CONFIRM_PURGE"}
               data-icon="inline-start"
             >
               {purging && <Loader2 className="animate-spin" data-icon="inline-start" />}

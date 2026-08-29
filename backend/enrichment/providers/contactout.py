@@ -11,7 +11,7 @@ logger = logging.getLogger(__name__)
 
 DEFAULT_BASE_URL = "https://api.contactout.com/v1"
 
-MAX_PAGE_SIZE = 50
+MAX_PAGE_SIZE = 25
 
 
 class ContactOutProvider(ContactEnrichmentProvider):
@@ -42,11 +42,47 @@ class ContactOutProvider(ContactEnrichmentProvider):
                     body = ""
             detail = f" - {body}" if body else ""
             raise ProviderError(f"ContactOut request failed: {exc}{detail}") from exc
-        return res.json()
+        data = res.json()
+        self._maybe_capture_credits(data)
+        return data
 
-    def _page_size(self, fallback: int = 25) -> int:
+    def _maybe_capture_credits(self, data: Dict[str, Any]) -> None:
+        meta = data.get("meta") or data.get("metadata") or {}
+        if not isinstance(meta, dict):
+            return
+        remaining = meta.get("credits_remaining")
+        if remaining is None:
+            return
+        try:
+            self.persist_credit_usage({
+                "email_remaining": int(remaining),
+                "provider": "contactout",
+            })
+        except Exception:  # noqa: BLE001
+            logger.debug("Failed to persist ContactOut credits from response meta", exc_info=True)
+
+    def _page_size(self, fallback: int = 10) -> int:
         size = int(self.config.default_params.get("max_results") or fallback)
         return min(MAX_PAGE_SIZE, max(1, size))
+
+    def fetch_credit_usage(self) -> Dict[str, Any]:
+        """GET /v1/stats — email/phone/search remaining credits for the current month."""
+        data = self._request("GET", f"{self._base_url()}/stats")
+        usage = data.get("usage") or {}
+        if not isinstance(usage, dict):
+            usage = {}
+        return {
+            "provider": "contactout",
+            "email_remaining": usage.get("remaining", usage.get("quota")),
+            "email_quota": usage.get("quota"),
+            "email_used": usage.get("count"),
+            "phone_remaining": usage.get("phone_remaining", usage.get("phone_quota")),
+            "phone_quota": usage.get("phone_quota"),
+            "phone_used": usage.get("phone_count"),
+            "search_remaining": usage.get("search_remaining", usage.get("search_quota")),
+            "search_quota": usage.get("search_quota"),
+            "search_used": usage.get("search_count"),
+        }
 
     def search_people(
         self,
@@ -54,6 +90,8 @@ class ContactOutProvider(ContactEnrichmentProvider):
         titles: List[str],
         location: Optional[str] = None,
     ) -> List[Dict[str, Any]]:
+        # Search without reveal_info to conserve email/phone credits on free plans.
+        # Contact details are fetched in enrich_person().
         body: Dict[str, Any] = {
             "page": 1,
             "page_size": self._page_size(),
@@ -62,6 +100,7 @@ class ContactOutProvider(ContactEnrichmentProvider):
             "match_experience": "current",
             "detailed_experience": False,
             "detailed_education": False,
+            "reveal_info": False,
         }
         if location:
             body["location"] = [location]
@@ -88,18 +127,29 @@ class ContactOutProvider(ContactEnrichmentProvider):
         ]
 
     def enrich_person(self, identifiers: Dict[str, Any]) -> Dict[str, Any]:
-        if identifiers.get("email"):
+        needs_email = not identifiers.get("email")
+        needs_phone = not identifiers.get("phone")
+        if not needs_email and not needs_phone:
             return identifiers
         linkedin_url = identifiers.get("linkedin_url")
         if not linkedin_url:
             return identifiers
+
+        include: List[str] = []
+        if needs_email:
+            include.extend(["work_email", "personal_email"])
+        if needs_phone:
+            include.append("phone")
+        if not include:
+            return identifiers
+
         try:
             data = self._request(
                 "POST",
                 f"{self._base_url()}/people/enrich",
                 json={
                     "linkedin_url": linkedin_url,
-                    "include": ["work_email", "personal_email", "phone"],
+                    "include": include,
                 },
             )
         except ProviderError:
@@ -109,17 +159,33 @@ class ContactOutProvider(ContactEnrichmentProvider):
             return identifiers
         merged = dict(identifiers)
         for key, value in self._to_contact(linkedin_url, profile).items():
-            if value:
+            if value and (not merged.get(key) or key in ("email", "phone", "verification_state")):
+                if key == "email" and merged.get("email") and not needs_email:
+                    continue
+                if key == "phone" and merged.get("phone") and not needs_phone:
+                    continue
                 merged[key] = value
+        # Prefer newly revealed email/phone over empty search stubs.
+        enriched = self._to_contact(linkedin_url, profile)
+        if needs_email and enriched.get("email"):
+            merged["email"] = enriched["email"]
+            merged["email_verified"] = enriched.get("email_verified", False)
+            merged["verification_state"] = enriched.get("verification_state", "unverified")
+        if needs_phone and enriched.get("phone"):
+            merged["phone"] = enriched["phone"]
+        try:
+            self.persist_credit_usage()
+        except Exception:  # noqa: BLE001
+            logger.debug("Failed to refresh ContactOut credits after enrich", exc_info=True)
         return merged
 
     def _to_contact(self, linkedin_url: str, person: Dict[str, Any]) -> Dict[str, Any]:
         contact_info = person.get("contact_info") or {}
         if not isinstance(contact_info, dict):
             contact_info = {}
-        emails = contact_info.get("personal_emails") or contact_info.get("emails") or []
-        if not isinstance(emails, list):
-            emails = []
+        personal_emails = contact_info.get("personal_emails") or contact_info.get("emails") or []
+        if not isinstance(personal_emails, list):
+            personal_emails = []
         work_emails = contact_info.get("work_emails") or []
         if not isinstance(work_emails, list):
             work_emails = []
@@ -127,18 +193,21 @@ class ContactOutProvider(ContactEnrichmentProvider):
         if not isinstance(phones, list):
             phones = []
 
-        email = (emails + work_emails)[0] if (emails + work_emails) else ""
+        # Prefer work email for recruiting outreach.
+        email = ""
+        for candidate in [*work_emails, *personal_emails]:
+            if isinstance(candidate, str) and candidate.strip():
+                email = candidate.strip()
+                break
         if not email:
-            for key in ("email", "work_email", "personal_email"):
+            for key in ("work_email", "email", "personal_email"):
                 raw = person.get(key)
                 if isinstance(raw, list) and raw:
-                    email = raw[0]
+                    email = str(raw[0])
                     break
-                if isinstance(raw, str) and raw:
-                    email = raw
+                if isinstance(raw, str) and raw.strip():
+                    email = raw.strip()
                     break
-        if not isinstance(email, str):
-            email = ""
 
         verified = False
         if email:
@@ -152,15 +221,22 @@ class ContactOutProvider(ContactEnrichmentProvider):
             ):
                 verified = False
 
-        phone = phones[0] if phones else ""
+        phone = ""
+        for item in phones:
+            if isinstance(item, str) and item.strip():
+                phone = item.strip()
+                break
+            if isinstance(item, dict):
+                raw = item.get("number") or item.get("raw_number") or item.get("phone")
+                if raw:
+                    phone = str(raw).strip()
+                    break
         if not phone:
             raw_phone = person.get("phone")
             if isinstance(raw_phone, list) and raw_phone:
-                phone = raw_phone[0]
+                phone = str(raw_phone[0])
             elif isinstance(raw_phone, str):
                 phone = raw_phone
-        if not isinstance(phone, str):
-            phone = ""
 
         return {
             "full_name": strip_html(
@@ -169,20 +245,15 @@ class ContactOutProvider(ContactEnrichmentProvider):
             "job_title": strip_html(
                 person.get("title") or person.get("headline") or ""
             ),
-            "email": email,
-            "phone": phone,
+            "email": email if isinstance(email, str) else "",
+            "phone": phone if isinstance(phone, str) else "",
             "linkedin_url": linkedin_url or person.get("url") or person.get("linkedinUrl") or "",
             "location": strip_html(person.get("location")),
             "email_verified": bool(verified),
             "confidence_score": float(person.get("confidence") or 0.0),
+            "verification_state": "verified" if verified else "unverified",
         }
 
     def health_check(self) -> bool:
-        data = self._request(
-            "POST",
-            f"{self._base_url()}/people/search",
-            json={"page": 1, "page_size": 10, "company": ["ZZZNoSuchCompanyXYZ123"]},
-        )
-        if not isinstance(data, dict):
-            raise ProviderError("ContactOut returned an unexpected response.")
+        self.persist_credit_usage()
         return True

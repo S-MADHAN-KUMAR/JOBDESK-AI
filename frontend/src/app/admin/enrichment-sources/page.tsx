@@ -11,7 +11,9 @@ import {
   Gauge,
   KeyRound,
   Loader2,
+  Coins,
   Plus,
+  RefreshCw,
   Settings2,
   ShieldAlert,
   Trash2,
@@ -25,6 +27,7 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card"
+import { Skeleton } from "@/components/ui/skeleton"
 import {
   Dialog,
   DialogContent,
@@ -36,7 +39,9 @@ import {
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { AppShell } from "@/components/app-shell"
+import { PageHeader, EmptyState } from "@/components/page-header"
 import { cn } from "@/lib/utils"
+import { toast } from "sonner"
 import { useProfile, useEnrichmentSources } from "@/lib/hooks"
 import {
   type EnrichmentSource,
@@ -44,6 +49,7 @@ import {
   type HealthStatus,
   createEnrichmentSource,
   updateEnrichmentSource,
+  refreshEnrichmentCredits,
 } from "@/lib/api"
 
 const HEALTH_META: Record<
@@ -72,7 +78,21 @@ const HEALTH_META: Record<
   },
 }
 
-const PROVIDER_HINT = "Provider codes: pdl, contactout, apollo, lusha"
+const PROVIDER_HINT = "Provider codes: contactout, apollo"
+
+function formatCredit(value: number | null | undefined): string {
+  if (value === null || value === undefined) return "—"
+  return value.toLocaleString()
+}
+
+function formatRemaining(
+  remaining: number | null | undefined,
+  quota: number | null | undefined,
+): string {
+  if (remaining == null && quota == null) return "—"
+  if (quota == null) return `${formatCredit(remaining)} remaining`
+  return `${formatCredit(remaining ?? 0)} remaining of ${formatCredit(quota)}`
+}
 
 type FormState = {
   name: string
@@ -131,7 +151,6 @@ export default function AdminEnrichmentSourcesPage() {
   const { data: me, isLoading: profileLoading, error: profileError } = useProfile()
   const { data: sourcesPage, isLoading: sourcesLoading, refetch: refetchSources } = useEnrichmentSources()
   const sources = sourcesPage?.results ?? []
-  const [error, setError] = useState<string | null>(null)
 
   const [formOpen, setFormOpen] = useState(false)
   const [editing, setEditing] = useState<EnrichmentSource | null>(null)
@@ -144,6 +163,7 @@ export default function AdminEnrichmentSourcesPage() {
 
   const [deleteTarget, setDeleteTarget] = useState<EnrichmentSource | null>(null)
   const [deleting, setDeleting] = useState(false)
+  const [refreshingCredits, setRefreshingCredits] = useState<string | null>(null)
 
   useEffect(() => {
     if (profileError) router.push("/login")
@@ -164,29 +184,47 @@ export default function AdminEnrichmentSourcesPage() {
   async function saveForm(e: React.FormEvent) {
     e.preventDefault()
     setSaving(true)
-    setError(null)
     try {
       if (editing) {
         await updateEnrichmentSource(editing.id, formToInput(form))
+        toast.success("Provider updated successfully.")
       } else {
         await createEnrichmentSource(formToInput(form))
+        toast.success("Provider created successfully.")
       }
       setFormOpen(false)
       refetchSources()
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to save provider")
+      toast.error(err instanceof Error ? err.message : "Failed to save provider")
     } finally {
       setSaving(false)
     }
   }
 
   async function toggleActive(source: EnrichmentSource) {
-    setError(null)
     try {
       await updateEnrichmentSource(source.id, { is_active: !source.is_active })
       refetchSources()
+      toast.success(source.is_active ? "Provider disabled." : "Provider enabled.")
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to toggle provider")
+      toast.error(err instanceof Error ? err.message : "Failed to toggle provider")
+    }
+  }
+
+  async function refreshCredits(source: EnrichmentSource) {
+    setRefreshingCredits(source.id)
+    try {
+      const result = await refreshEnrichmentCredits(source.id)
+      if (!result.success) {
+        toast.error(result.message || "Failed to refresh credits")
+      } else {
+        toast.success(result.message || "Credits refreshed.")
+      }
+      refetchSources()
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Failed to refresh credits")
+    } finally {
+      setRefreshingCredits(null)
     }
   }
 
@@ -194,7 +232,6 @@ export default function AdminEnrichmentSourcesPage() {
     e.preventDefault()
     if (!credTarget) return
     setSavingCreds(true)
-    setError(null)
     try {
       await updateEnrichmentSource(credTarget.id, {
         auth_config: { api_key: apiKey.trim() },
@@ -202,8 +239,9 @@ export default function AdminEnrichmentSourcesPage() {
       setCredTarget(null)
       setApiKey("")
       refetchSources()
+      toast.success("Credentials saved.")
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to save credentials")
+      toast.error(err instanceof Error ? err.message : "Failed to save credentials")
     } finally {
       setSavingCreds(false)
     }
@@ -212,13 +250,13 @@ export default function AdminEnrichmentSourcesPage() {
   async function confirmDelete() {
     if (!deleteTarget) return
     setDeleting(true)
-    setError(null)
     try {
       await updateEnrichmentSource(deleteTarget.id, { is_active: false })
       setDeleteTarget(null)
       refetchSources()
+      toast.success("Provider disabled.")
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to disable provider")
+      toast.error(err instanceof Error ? err.message : "Failed to disable provider")
     } finally {
       setDeleting(false)
     }
@@ -228,45 +266,63 @@ export default function AdminEnrichmentSourcesPage() {
 
   return (
     <AppShell user={me} loading={profileLoading}>
-      <div className="p-4 sm:p-6 space-y-6">
-        <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
-          <div>
-            <h1 className="text-2xl font-bold tracking-tight text-foreground">
-              Enrichment Sources
-            </h1>
-            <p className="text-sm text-muted-foreground">
-              Configure contact-enrichment connectors (PDL, ContactOut, Apollo)
-              and enable or disable them for the waterfall
-            </p>
-          </div>
-          <Button onClick={openCreate} data-icon="inline-start">
-            <Plus data-icon="inline-start" />
-            Add new provider
-          </Button>
-        </div>
+      <div className="space-y-6 p-4 sm:p-6">
+        <PageHeader
+          variant="banner"
+          icon={ContactRound}
+          title="Enrichment Sources"
+          description="Configure ContactOut and Apollo connectors, credentials, and remaining credits for the waterfall."
+          actions={
+            <Button
+              variant="outline"
+              onClick={openCreate}
+              data-icon="inline-start"
+              className="border-white/40 bg-transparent text-white hover:bg-white/10 hover:text-white"
+            >
+              <Plus data-icon="inline-start" />
+              Add provider
+            </Button>
+          }
+        />
 
-        {error && (
-          <div className="rounded-lg border border-destructive/30 bg-destructive/5 px-4 py-3 text-sm text-destructive">
-            {error}
+        {sourcesLoading ? (
+          <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
+            {Array.from({ length: 3 }).map((_, i) => (
+              <Card key={i} className="flex flex-col">
+                <CardHeader className="space-y-3 p-4">
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="min-w-0 flex-1 space-y-2">
+                      <Skeleton className="h-5 w-40" />
+                      <Skeleton className="h-4 w-24" />
+                    </div>
+                    <Skeleton className="h-6 w-10 rounded-full" />
+                  </div>
+                </CardHeader>
+                <CardContent className="flex flex-1 flex-col gap-3 p-4 pt-0">
+                  <Skeleton className="h-3 w-full" />
+                  <Skeleton className="h-3 w-3/4" />
+                  <div className="mt-auto grid grid-cols-2 gap-2 pt-2">
+                    <Skeleton className="h-9 w-full" />
+                    <Skeleton className="h-9 w-full" />
+                  </div>
+                </CardContent>
+              </Card>
+            ))}
           </div>
-        )}
-
-        {sources.length === 0 ? (
+        ) : sources.length === 0 ? (
           <Card>
-            <CardContent className="flex flex-col items-center justify-center gap-3 px-4 py-16 text-center">
-              <span className="flex size-12 items-center justify-center rounded-full bg-muted text-muted-foreground">
-                <ContactRound className="size-6" />
-              </span>
-              <div>
-                <p className="font-medium">No enrichment providers configured</p>
-                <p className="text-sm text-muted-foreground">
-                  Add your first contact-enrichment connector to get started.
-                </p>
-              </div>
-              <Button onClick={openCreate} data-icon="inline-start">
-                <Plus data-icon="inline-start" />
-                Add new provider
-              </Button>
+            <CardContent className="p-0">
+              <EmptyState
+                icon={ContactRound}
+                title="No enrichment providers configured"
+                description="Add your first contact-enrichment connector to get started."
+                action={
+                  <Button onClick={openCreate} data-icon="inline-start">
+                    <Plus data-icon="inline-start" />
+                    Add provider
+                  </Button>
+                }
+              />
             </CardContent>
           </Card>
         ) : (
@@ -378,6 +434,105 @@ export default function AdminEnrichmentSourcesPage() {
                     </div>
 
                     <div className="rounded-lg border p-3 text-sm">
+                      <div className="flex items-center justify-between gap-2">
+                        <p className="flex items-center gap-1.5 text-xs font-medium text-muted-foreground">
+                          <Coins className="size-3.5" />
+                          Remaining credits
+                        </p>
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          className="h-7 px-2 text-xs"
+                          disabled={
+                            !source.auth_configured ||
+                            refreshingCredits === source.id
+                          }
+                          onClick={() => void refreshCredits(source)}
+                          data-icon="inline-start"
+                        >
+                          {refreshingCredits === source.id ? (
+                            <Loader2 className="size-3.5 animate-spin" />
+                          ) : (
+                            <RefreshCw className="size-3.5" />
+                          )}
+                          Refresh
+                        </Button>
+                      </div>
+                      <div className="mt-2 grid grid-cols-2 gap-2 text-sm">
+                        <div>
+                          <p className="text-[11px] text-muted-foreground">
+                            Email remaining
+                          </p>
+                          <p className="font-semibold">
+                            {formatRemaining(
+                              source.credit_usage?.email_remaining,
+                              source.credit_usage?.email_quota,
+                            )}
+                          </p>
+                          {source.credit_usage?.email_used != null && (
+                            <p className="text-[11px] text-muted-foreground">
+                              {formatCredit(source.credit_usage.email_used)} used
+                              this cycle
+                            </p>
+                          )}
+                        </div>
+                        <div>
+                          <p className="text-[11px] text-muted-foreground">
+                            Phone remaining
+                          </p>
+                          <p className="font-semibold">
+                            {source.credit_usage?.phone_quota === 0 &&
+                            (source.credit_usage?.email_remaining ?? 0) > 0
+                              ? "Uses email credits"
+                              : formatRemaining(
+                                  source.credit_usage?.phone_remaining,
+                                  source.credit_usage?.phone_quota,
+                                )}
+                          </p>
+                          {source.credit_usage?.phone_used != null &&
+                            (source.credit_usage.phone_quota ?? 0) > 0 && (
+                            <p className="text-[11px] text-muted-foreground">
+                              {formatCredit(source.credit_usage.phone_used)} used
+                              this cycle
+                            </p>
+                          )}
+                        </div>
+                        {(source.credit_usage?.search_remaining != null ||
+                          source.credit_usage?.search_quota != null) && (
+                          <div className="col-span-2">
+                            <p className="text-[11px] text-muted-foreground">
+                              Search
+                            </p>
+                            <p className="font-semibold">
+                              {formatCredit(source.credit_usage?.search_remaining)}
+                              {source.credit_usage?.search_quota != null && (
+                                <span className="text-xs font-normal text-muted-foreground">
+                                  {" "}
+                                  / {formatCredit(source.credit_usage.search_quota)}
+                                </span>
+                              )}
+                            </p>
+                          </div>
+                        )}
+                      </div>
+                      {source.credit_usage?.updated_at ? (
+                        <p className="mt-2 text-[11px] text-muted-foreground">
+                          Updated{" "}
+                          {new Date(source.credit_usage.updated_at).toLocaleString()}
+                          {source.credit_usage.cycle_end
+                            ? ` · cycle ends ${new Date(source.credit_usage.cycle_end).toLocaleDateString()}`
+                            : ""}
+                        </p>
+                      ) : (
+                        <p className="mt-2 text-[11px] text-muted-foreground">
+                          {source.auth_configured
+                            ? "Click Refresh to pull live credits"
+                            : "Add API key, then refresh credits"}
+                        </p>
+                      )}
+                    </div>
+
+                    <div className="rounded-lg border p-3 text-sm">
                       <p className="text-xs font-medium text-muted-foreground">
                         Target defaults
                       </p>
@@ -463,7 +618,7 @@ export default function AdminEnrichmentSourcesPage() {
                     id="source-name"
                     value={form.name}
                     onChange={(e) => setForm({ ...form, name: e.target.value })}
-                    placeholder="e.g. People Data Labs"
+                    placeholder="e.g. ContactOut"
                     required
                   />
                 </div>
@@ -475,7 +630,7 @@ export default function AdminEnrichmentSourcesPage() {
                     onChange={(e) =>
                       setForm({ ...form, provider_code: e.target.value })
                     }
-                    placeholder="e.g. pdl"
+                    placeholder="e.g. contactout"
                     disabled={editing !== null}
                     required
                   />
