@@ -83,8 +83,6 @@ export default function LoginPage() {
         className="relative h-dvh w-full overflow-hidden shadow-2xl"
         style={{
           backgroundColor: colors.baseBg,
-          fontFamily:
-            'system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif',
         }}
       >
         <div className="absolute top-4 right-4 z-30 sm:top-6 sm:right-6">

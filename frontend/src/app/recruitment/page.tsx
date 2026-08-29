@@ -125,7 +125,7 @@ export default function RecruitmentPage() {
           animate={{ opacity: 1, y: 0 }}
           transition={{ duration: 0.4 }}
         >
-          <h1 className="text-2xl font-bold tracking-tight text-foreground">
+          <h1 className="font-heading text-2xl font-bold tracking-tight text-foreground">
             Recruitment Intelligence
           </h1>
           <p className="text-sm text-muted-foreground">

@@ -40,7 +40,7 @@
   --sidebar-ring: hsl(158 100% 27%);
   --banner: hsl(158 85% 18%);
   --banner-foreground: hsl(0 0% 100%);
-  --font-sans: Inter, ui-sans-serif, sans-serif, system-ui;
+  --font-sans: var(--font-inter), ui-sans-serif, system-ui, sans-serif;
   --font-serif: ui-serif, Georgia, Cambria, "Times New Roman", Times, serif;
   --font-mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
   --radius: 0.875rem;
@@ -97,7 +97,7 @@
   --sidebar-ring: hsl(158 70% 40%);
   --banner: hsl(158 60% 22%);
   --banner-foreground: hsl(0 0% 100%);
-  --font-sans: Inter, ui-sans-serif, sans-serif, system-ui;
+  --font-sans: var(--font-inter), ui-sans-serif, system-ui, sans-serif;
   --font-serif: ui-serif, Georgia, Cambria, "Times New Roman", Times, serif;
   --font-mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
   --radius: 0.875rem;
