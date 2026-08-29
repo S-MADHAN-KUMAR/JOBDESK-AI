@@ -70,6 +70,8 @@ docstring-parser==0.18.0
     # via anthropic
 email-validator==2.3.0
     # via pydantic
+gunicorn==26.2.0
+    # via demandaccel-backend
 h11==0.16.0 ; sys_platform != 'emscripten'
     # via httpcore2
 httpcore2==2.12.0 ; sys_platform != 'emscripten'
