@@ -1,7 +1,5 @@
 from django.urls import include, path
 from rest_framework.routers import DefaultRouter
-from rest_framework_simplejwt.views import TokenObtainPairView, TokenRefreshView
-
 from .admin_views import (
     CanonicalJobViewSet,
     MasterCompanyViewSet,
@@ -10,6 +8,7 @@ from .admin_views import (
     MasterSkillViewSet,
     MasterTechnologyViewSet,
     IngestionRunViewSet,
+    IngestionScheduleViewSet,
     bulk_delete_canonical_jobs,
     bulk_delete_ingestion_runs,
     confidence_monitoring,
@@ -38,13 +37,18 @@ from .admin_views import (
     demand_scores,
     company_detail,
     training_recommendations,
+    dismiss_market_alert,
 )
 from .views import (
     AdminUserViewSet,
     JobExplorerViewSet,
     JobSourceViewSet,
+    CookieTokenObtainPairView,
+    CookieTokenRefreshView,
     LogoutView,
     PasswordChangeView,
+    PasswordResetConfirmView,
+    PasswordResetRequestView,
     ProfileView,
 )
 
@@ -55,6 +59,7 @@ router.register(r'jobs', JobExplorerViewSet, basename='jobs')
 
 # Ingestion pipeline admin
 router.register(r'admin/ingestion-runs', IngestionRunViewSet, basename='admin-ingestion-runs')
+router.register(r'admin/ingestion-schedules', IngestionScheduleViewSet, basename='admin-ingestion-schedules')
 router.register(r'admin/canonical-jobs', CanonicalJobViewSet, basename='admin-canonical-jobs')
 router.register(r'admin/master-companies', MasterCompanyViewSet, basename='admin-master-companies')
 router.register(r'admin/master-locations', MasterLocationViewSet, basename='admin-master-locations')
@@ -64,11 +69,13 @@ router.register(r'admin/master-skills', MasterSkillViewSet, basename='admin-mast
 
 urlpatterns = [
     # FR-001 Authentication Endpoints
-    path('api/auth/login/', TokenObtainPairView.as_view(), name='token_obtain_pair'),
-    path('api/auth/refresh/', TokenRefreshView.as_view(), name='token_refresh'),
+    path('api/auth/login/', CookieTokenObtainPairView.as_view(), name='token_obtain_pair'),
+    path('api/auth/refresh/', CookieTokenRefreshView.as_view(), name='token_refresh'),
     path('api/auth/logout/', LogoutView.as_view(), name='token_logout'),
     path('api/auth/profile/', ProfileView.as_view(), name='user_profile'),
     path('api/auth/password/', PasswordChangeView.as_view(), name='password_change'),
+    path('api/auth/forgot-password/', PasswordResetRequestView.as_view(), name='forgot-password'),
+    path('api/auth/reset-password/', PasswordResetConfirmView.as_view(), name='reset-password'),
 
     # Admin User Control Endpoint
     path('api/', include(router.urls)),
@@ -111,6 +118,7 @@ urlpatterns = [
     # Shared dashboard / alerts
     path('api/dashboard/overview/', dashboard_overview, name='dashboard-overview'),
     path('api/alerts/', market_alerts, name='market-alerts'),
+    path('api/alerts/<uuid:alert_id>/dismiss/', dismiss_market_alert, name='market-alert-dismiss'),
 
     # CEO daily brief
     path('api/ceo/daily-brief/', ceo_daily_brief, name='ceo-daily-brief'),

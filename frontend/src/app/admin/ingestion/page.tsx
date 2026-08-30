@@ -60,12 +60,18 @@ import {
   type User,
   type JobSource,
   type IngestionRun,
+  type IngestionSchedule,
+  type ScheduleFrequency,
   APIFY_JOB_PLATFORMS,
   DEFAULT_APIFY_PLATFORMS,
   SERPAPI_JOB_PLATFORMS,
   DEFAULT_SERPAPI_PLATFORMS,
   fetchJobSources,
   fetchIngestionRuns,
+  fetchIngestionSchedules,
+  createIngestionSchedule,
+  toggleIngestionSchedule,
+  deleteIngestionSchedule,
   triggerManualRun,
   bulkDeleteIngestionRuns,
   updateProfile,
@@ -139,55 +145,8 @@ function splitLegacyPlatforms(platforms: string[]): {
   return { apify, serpapi }
 }
 
-type ScheduleFrequency = "once" | "daily" | "weekly" | "monthly"
+type Schedule = IngestionSchedule
 
-type Schedule = {
-  id: string
-  source_id: string
-  keyword: string
-  location: string
-  country: string
-  max_pages: string
-  min_salary: string
-  max_salary: string
-  employment_type: string
-  work_mode: string
-  role: string
-  posted_within: string
-  /** @deprecated Prefer apify_platforms / serpapi_platforms. */
-  platforms: string[]
-  apify_platforms?: string[]
-  serpapi_platforms?: string[]
-  frequency: ScheduleFrequency
-  time: string
-  dayOfWeek: number
-  dayOfMonth: number
-  startDate: string
-  totalRuns: number
-  runsCompleted: number
-  enabled: boolean
-  lastRun: string | null
-  lastRunStatus: "success" | "error" | null
-  lastError: string | null
-  nextRun: string
-}
-
-function platformsForSchedule(
-  schedule: Pick<Schedule, "apify_platforms" | "serpapi_platforms" | "platforms">,
-  providerCode: string,
-): string[] {
-  const code = providerCode.trim().toLowerCase()
-  if (code === "apify") {
-    if (schedule.apify_platforms && schedule.apify_platforms.length > 0) {
-      return schedule.apify_platforms
-    }
-  } else if (code === "serpapi") {
-    if (schedule.serpapi_platforms && schedule.serpapi_platforms.length > 0) {
-      return schedule.serpapi_platforms
-    }
-  }
-  return schedule.platforms ?? []
-}
 
 function displayPlatforms(
   schedule: Pick<Schedule, "apify_platforms" | "serpapi_platforms" | "platforms">,
@@ -236,27 +195,6 @@ function normalizeSchedule(raw: Schedule): Schedule {
   }
 }
 
-function getSchedules(): Schedule[] {
-  if (typeof window === "undefined") return []
-  try {
-    const parsed = JSON.parse(
-      localStorage.getItem("demandaccel_schedules") || "[]",
-    ) as Schedule[]
-    return parsed
-      .map(normalizeSchedule)
-      .sort((a, b) => {
-        const aTime = Number(a.id) || new Date(a.lastRun || 0).getTime()
-        const bTime = Number(b.id) || new Date(b.lastRun || 0).getTime()
-        return bTime - aTime
-      })
-  } catch {
-    return []
-  }
-}
-
-function saveSchedules(schedules: Schedule[]) {
-  localStorage.setItem("demandaccel_schedules", JSON.stringify(schedules))
-}
 
 function parse12hTime(time12h: string): { hours24: number; minutes: number } {
   const match = time12h.match(/^(\d{1,2}):(\d{2})\s*(AM|PM)$/i)
@@ -287,46 +225,9 @@ function fromTimeInputValue(value: string): string {
   return `${h}:${String(m).padStart(2, "0")} ${period}`
 }
 
-function calculateNextRun(schedule: Schedule): string {
-  const now = new Date()
-  const { hours24, minutes } = parse12hTime(schedule.time || "9:00 AM")
 
-  if (schedule.frequency === "once") {
-    const start = new Date(schedule.startDate)
-    start.setHours(hours24, minutes, 0, 0)
-    if (start <= now) {
-      return new Date(now.getTime() + 60_000).toISOString()
-    }
-    return start.toISOString()
-  }
-
-  const next = new Date(now)
-  next.setHours(hours24, minutes, 0, 0)
-
-  if (schedule.frequency === "daily") {
-    if (next <= now) next.setDate(next.getDate() + 1)
-    return next.toISOString()
-  }
-
-  if (schedule.frequency === "weekly") {
-    const currentDay = now.getDay()
-    let daysUntil = schedule.dayOfWeek - currentDay
-    if (daysUntil < 0) daysUntil += 7
-    if (daysUntil === 0 && next <= now) daysUntil = 7
-    next.setDate(next.getDate() + daysUntil)
-    return next.toISOString()
-  }
-
-  if (schedule.frequency === "monthly") {
-    next.setDate(schedule.dayOfMonth)
-    if (next <= now) next.setMonth(next.getMonth() + 1)
-    return next.toISOString()
-  }
-
-  return next.toISOString()
-}
-
-function formatScheduleNext(nextRun: string, nowMs = Date.now()): string {
+function formatScheduleNext(nextRun: string | null | undefined, nowMs = Date.now()): string {
+  if (!nextRun) return "—"
   const diffMs = new Date(nextRun).getTime() - nowMs
   if (diffMs < 0) return "Overdue"
   const mins = Math.floor(diffMs / 60_000)
@@ -337,7 +238,8 @@ function formatScheduleNext(nextRun: string, nowMs = Date.now()): string {
   return `in ${days}d ${hours % 24}h`
 }
 
-function getCountdownParts(nextRun: string, nowMs: number) {
+function getCountdownParts(nextRun: string | null | undefined, nowMs: number) {
+  if (!nextRun) return { totalMs: 0, days: 0, hours: 0, minutes: 0, seconds: 0, overdue: false }
   const diffMs = new Date(nextRun).getTime() - nowMs
   if (diffMs <= 0) {
     return { h: 0, m: 0, s: 0, totalMs: diffMs, overdue: true }
@@ -362,7 +264,8 @@ function formatCountdownClock(parts: { h: number; m: number; s: number }): strin
   return `${pad(parts.h)}:${pad(parts.m)}:${pad(parts.s)}`
 }
 
-function formatAbsoluteNext(nextRun: string): string {
+function formatAbsoluteNext(nextRun: string | null | undefined): string {
+  if (!nextRun) return "—"
   const next = new Date(nextRun)
   return next.toLocaleString(undefined, {
     weekday: "short",
@@ -455,6 +358,7 @@ export default function AdminIngestionPage() {
   const schedulesPageSize = 10
   const [nowMs, setNowMs] = useState(() => Date.now())
   const [scheduleOpen, setScheduleOpen] = useState(false)
+  const [savingSchedule, setSavingSchedule] = useState(false)
   const [scheduleForm, setScheduleForm] = useState<Partial<Schedule>>({
     frequency: "daily",
     time: "9:00 AM",
@@ -463,7 +367,7 @@ export default function AdminIngestionPage() {
     startDate: new Date().toISOString().split("T")[0],
     totalRuns: 0,
     enabled: true,
-    source_id: "",
+    source_id: "all",
     keyword: "",
     location: "",
     country: "India",
@@ -483,9 +387,19 @@ export default function AdminIngestionPage() {
     setReloadKey((k) => k + 1)
   }, [])
 
-  useEffect(() => {
-    setSchedules(getSchedules())
+  const loadSchedules = useCallback(async () => {
+    try {
+      const list = await fetchIngestionSchedules()
+      setSchedules(list.map(normalizeSchedule))
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Failed to load schedules")
+    }
   }, [])
+
+  useEffect(() => {
+    if (!me || me.role !== "ADMIN") return
+    void loadSchedules()
+  }, [me, loadSchedules, reloadKey])
 
   useEffect(() => {
     const id = setInterval(() => setNowMs(Date.now()), 1000)
@@ -497,14 +411,14 @@ export default function AdminIngestionPage() {
   )
   const nextUpcoming = activeSchedules
     .slice()
-    .sort((a, b) => new Date(a.nextRun).getTime() - new Date(b.nextRun).getTime())[0]
+    .sort((a, b) => new Date(a.nextRun || 0).getTime() - new Date(b.nextRun || 0).getTime())[0]
   const nextUpcomingParts = nextUpcoming
     ? getCountdownParts(nextUpcoming.nextRun, nowMs)
     : null
 
   const schedulesNewestFirst = [...schedules].sort((a, b) => {
-    const aTime = Number(a.id) || new Date(a.lastRun || 0).getTime()
-    const bTime = Number(b.id) || new Date(b.lastRun || 0).getTime()
+    const aTime = new Date(a.created_at || a.lastRun || 0).getTime()
+    const bTime = new Date(b.created_at || b.lastRun || 0).getTime()
     return bTime - aTime
   })
   const schedulesTotalPages = Math.max(
@@ -574,115 +488,8 @@ export default function AdminIngestionPage() {
     return () => clearInterval(id)
   }, [autoRefresh, refresh])
 
-  useEffect(() => {
-    const id = setInterval(() => {
-      const current = getSchedules()
-      const now = new Date()
-      let changed = false
 
-      const updated = current.map((s) => {
-        if (!s.enabled) return s
-        if (s.totalRuns > 0 && s.runsCompleted >= s.totalRuns) return s
-        const nextRun = new Date(s.nextRun)
-        if (nextRun <= now) {
-          changed = true
-          const newCompleted = s.runsCompleted + 1
-          const shouldDisable = s.totalRuns > 0 && newCompleted >= s.totalRuns
-
-          const basePayload = {
-            keyword: s.keyword.trim() || undefined,
-            location: s.location.trim() || undefined,
-            country: s.country.trim() || undefined,
-            max_pages: Math.max(1, Number(s.max_pages) || 1),
-            min_salary: s.min_salary ? Number(s.min_salary) : undefined,
-            max_salary: s.max_salary ? Number(s.max_salary) : undefined,
-            employment_type: s.employment_type || undefined,
-            work_mode: s.work_mode || undefined,
-            role: s.role.trim() || undefined,
-            posted_within: s.posted_within || undefined,
-          }
-
-          const runPromise =
-            s.source_id === "all"
-              ? fetchJobSources().then((list) =>
-                  Promise.all(
-                    list
-                      .filter((src) => src.is_active)
-                      .map((src) => {
-                        const boards = platformsForSchedule(s, src.provider_code)
-                        return triggerManualRun({
-                          ...basePayload,
-                          source_id: src.id,
-                          platforms: boards.length > 0 ? boards : undefined,
-                        })
-                      }),
-                  ),
-                )
-              : triggerManualRun({
-                  ...basePayload,
-                  source_id: s.source_id,
-                  platforms: (() => {
-                    const src = sources.find((x) => x.id === s.source_id)
-                    const boards = platformsForSchedule(
-                      s,
-                      src?.provider_code || "",
-                    )
-                    return boards.length > 0 ? boards : undefined
-                  })(),
-                })
-
-          runPromise
-            .then(() => {
-              const fresh = getSchedules()
-              const idx = fresh.findIndex((x) => x.id === s.id)
-              if (idx !== -1) {
-                fresh[idx] = {
-                  ...fresh[idx],
-                  lastRunStatus: "success",
-                  lastError: null,
-                }
-                saveSchedules(fresh)
-                setSchedules([...fresh])
-              }
-            })
-            .catch((err) => {
-              const fresh = getSchedules()
-              const idx = fresh.findIndex((x) => x.id === s.id)
-              if (idx !== -1) {
-                fresh[idx] = {
-                  ...fresh[idx],
-                  lastRunStatus: "error",
-                  lastError: err instanceof Error ? err.message : "Request failed",
-                }
-                saveSchedules(fresh)
-                setSchedules([...fresh])
-              }
-            })
-
-          return {
-            ...s,
-            runsCompleted: newCompleted,
-            lastRun: now.toISOString(),
-            lastRunStatus: null,
-            lastError: null,
-            nextRun: calculateNextRun(s),
-            enabled: !shouldDisable,
-          }
-        }
-        return s
-      })
-
-      if (changed) {
-        saveSchedules(updated)
-        setSchedules(updated)
-        refresh()
-      }
-    }, 30_000)
-
-    return () => clearInterval(id)
-  }, [refresh])
-
-  function saveSchedule() {
+  async function saveSchedule() {
     const apify_platforms =
       scheduleForm.apify_platforms && scheduleForm.apify_platforms.length > 0
         ? scheduleForm.apify_platforms
@@ -696,60 +503,66 @@ export default function AdminIngestionPage() {
       apify_platforms,
       serpapi_platforms,
     })
-    const newSchedule: Schedule = {
-      id: Date.now().toString(),
-      source_id: "all",
-      keyword: scheduleForm.keyword || "",
-      location: scheduleForm.location || "",
-      country: scheduleForm.country || "India",
-      max_pages: scheduleForm.max_pages || "5",
-      min_salary: scheduleForm.min_salary || "",
-      max_salary: scheduleForm.max_salary || "",
-      employment_type: scheduleForm.employment_type || "",
-      work_mode: scheduleForm.work_mode || "",
-      role: scheduleForm.role || "",
-      posted_within: scheduleForm.posted_within || "",
-      platforms,
-      apify_platforms,
-      serpapi_platforms,
-      frequency: scheduleForm.frequency || "daily",
-      time: scheduleForm.time || "9:00 AM",
-      dayOfWeek: scheduleForm.dayOfWeek ?? 1,
-      dayOfMonth: scheduleForm.dayOfMonth ?? 1,
-      startDate: scheduleForm.startDate || new Date().toISOString().split("T")[0],
-      totalRuns: scheduleForm.totalRuns || 0,
-      runsCompleted: 0,
-      enabled: true,
-      lastRun: null,
-      lastRunStatus: null,
-      lastError: null,
-      nextRun: "",
+    setSavingSchedule(true)
+    try {
+      const created = await createIngestionSchedule({
+        source_id: scheduleForm.source_id || "all",
+        keyword: scheduleForm.keyword || "",
+        location: scheduleForm.location || "",
+        country: scheduleForm.country || "India",
+        max_pages: scheduleForm.max_pages || "5",
+        min_salary: scheduleForm.min_salary || "0",
+        max_salary: scheduleForm.max_salary || "0",
+        employment_type: scheduleForm.employment_type || "",
+        work_mode: scheduleForm.work_mode || "",
+        role: scheduleForm.role || "",
+        posted_within: scheduleForm.posted_within || "",
+        platforms,
+        apify_platforms,
+        serpapi_platforms,
+        frequency: (scheduleForm.frequency || "daily") as ScheduleFrequency,
+        time: scheduleForm.time || "9:00 AM",
+        dayOfWeek: scheduleForm.dayOfWeek ?? 1,
+        dayOfMonth: scheduleForm.dayOfMonth ?? 1,
+        startDate: scheduleForm.startDate || new Date().toISOString().split("T")[0],
+        totalRuns: scheduleForm.totalRuns || 0,
+        enabled: true,
+      })
+      const list = await fetchIngestionSchedules()
+      setSchedules(list.map(normalizeSchedule))
+      setSchedulesPage(1)
+      setScheduleOpen(false)
+      toast.success(
+        created.nextRun
+          ? `Schedule saved. Next run ${new Date(created.nextRun).toLocaleString()}`
+          : "Schedule saved to the server",
+      )
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Failed to create schedule")
+    } finally {
+      setSavingSchedule(false)
     }
-    newSchedule.nextRun = calculateNextRun(newSchedule)
-    const updated = [newSchedule, ...schedules]
-    saveSchedules(updated)
-    setSchedules(updated)
-    setSchedulesPage(1)
-    setScheduleOpen(false)
   }
 
-  function toggleSchedule(id: string) {
-    const updated = schedules.map((s) => {
-      if (s.id !== id) return s
-      const toggled = { ...s, enabled: !s.enabled }
-      if (toggled.enabled) {
-        toggled.nextRun = calculateNextRun(toggled)
-      }
-      return toggled
-    })
-    saveSchedules(updated)
-    setSchedules(updated)
+  async function toggleSchedule(id: string) {
+    try {
+      const updated = await toggleIngestionSchedule(id)
+      setSchedules((prev) =>
+        prev.map((s) => (s.id === id ? normalizeSchedule(updated) : s)),
+      )
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Failed to update schedule")
+    }
   }
 
-  function deleteSchedule(id: string) {
-    const updated = schedules.filter((s) => s.id !== id)
-    saveSchedules(updated)
-    setSchedules(updated)
+  async function deleteSchedule(id: string) {
+    try {
+      await deleteIngestionSchedule(id)
+      setSchedules((prev) => prev.filter((s) => s.id !== id))
+      toast.success("Schedule deleted")
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Failed to delete schedule")
+    }
   }
 
   function toggleSelectRun(id: string) {
@@ -916,7 +729,7 @@ export default function AdminIngestionPage() {
                   ? `${activeSchedules.length} active · ${schedules.length} total`
                   : schedules.length > 0
                     ? "All schedules paused"
-                    : "Automate provider ingestion on a recurring schedule"}
+                    : "Server-persisted schedules run via Celery Beat"}
               </p>
             </div>
             <Button
@@ -1790,8 +1603,10 @@ export default function AdminIngestionPage() {
               Cancel
             </Button>
             <Button
-              onClick={saveSchedule}
+              type="button"
+              onClick={() => void saveSchedule()}
               disabled={
+                savingSchedule ||
                 (hasApify &&
                   (scheduleForm.apify_platforms ?? []).length === 0) ||
                 (hasSerpapi &&
@@ -1799,8 +1614,12 @@ export default function AdminIngestionPage() {
               }
               data-icon="inline-start"
             >
-              <Timer data-icon="inline-start" />
-              Create schedule
+              {savingSchedule ? (
+                <Loader2 className="animate-spin" data-icon="inline-start" />
+              ) : (
+                <Timer data-icon="inline-start" />
+              )}
+              {savingSchedule ? "Saving..." : "Create schedule"}
             </Button>
           </DialogFooter>
         </DialogContent>

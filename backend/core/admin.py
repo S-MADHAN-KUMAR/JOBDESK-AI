@@ -1,7 +1,7 @@
 from django.contrib import admin
 from django.contrib.auth.admin import UserAdmin
 
-from .models import IngestionRun, JobSource, RawJob, User
+from .models import IngestionRun, IngestionSchedule, JobSource, MarketAlert, RawJob, User
 
 
 @admin.register(User)
@@ -31,6 +31,23 @@ class IngestionRunAdmin(admin.ModelAdmin):
     list_display = ('id', 'provider', 'status', 'started_at', 'ended_at', 'fetched_count', 'error_count')
     list_filter = ('status', 'provider')
     search_fields = ('provider__name', 'provider__provider_code')
+
+
+@admin.register(IngestionSchedule)
+class IngestionScheduleAdmin(admin.ModelAdmin):
+    list_display = (
+        'id', 'frequency', 'time', 'keyword', 'enabled',
+        'next_run', 'runs_completed', 'total_runs', 'last_run_status',
+    )
+    list_filter = ('frequency', 'enabled', 'last_run_status')
+    search_fields = ('keyword', 'location', 'role')
+
+
+@admin.register(MarketAlert)
+class MarketAlertAdmin(admin.ModelAdmin):
+    list_display = ('title', 'severity', 'category', 'dismissed_at', 'created_at')
+    list_filter = ('severity', 'category')
+    search_fields = ('title', 'message', 'company_name')
 
 
 @admin.register(RawJob)

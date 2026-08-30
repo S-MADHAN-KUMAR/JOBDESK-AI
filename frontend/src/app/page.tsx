@@ -23,8 +23,8 @@ import {
   CardTitle,
 } from "@/components/ui/card"
 import { AppShell } from "@/components/app-shell"
-import { StatCard } from "@/components/page-header"
-import { useProfile } from "@/lib/hooks"
+import { EmptyState, StatCard } from "@/components/page-header"
+import { useDashboardOverview, useProfile } from "@/lib/hooks"
 import { cn } from "@/lib/utils"
 
 const QUICK_LINKS = [
@@ -94,67 +94,24 @@ const QUICK_LINKS = [
   },
 ]
 
-const STAT_CARDS = [
-  {
-    label: "Total Jobs",
-    value: "12,847",
-    hint: "+18.5% vs last month",
-    tone: "blue" as const,
-    icon: BriefcaseBusiness,
-  },
-  {
-    label: "Enriched Contacts",
-    value: "3,256",
-    hint: "+25.3% enrichment rate",
-    tone: "amber" as const,
-    icon: Sparkles,
-  },
-  {
-    label: "Active Sources",
-    value: "8",
-    hint: "2 providers healthy",
-    tone: "rose" as const,
-    icon: Cable,
-  },
-  {
-    label: "Demand Score",
-    value: "88.4",
-    hint: "Across tracked roles",
-    tone: "green" as const,
-    icon: TrendingUp,
-  },
-]
-
-const RECENT_ACTIVITY = [
-  {
-    action: "Job ingestion completed",
-    source: "SerpApi",
-    time: "2 min ago",
-    status: "success",
-  },
-  {
-    action: "Contact enrichment run",
-    source: "ContactOut",
-    time: "15 min ago",
-    status: "success",
-  },
-  {
-    action: "Source rate limited",
-    source: "Apollo",
-    time: "1 hour ago",
-    status: "warning",
-  },
-  {
-    action: "New user created",
-    source: "Admin",
-    time: "3 hours ago",
-    status: "info",
-  },
-]
+function relativeTime(iso: string | null): string {
+  if (!iso) return "—"
+  const then = new Date(iso).getTime()
+  if (Number.isNaN(then)) return "—"
+  const diff = Date.now() - then
+  const minutes = Math.floor(diff / 60_000)
+  if (minutes < 1) return "just now"
+  if (minutes < 60) return `${minutes} min ago`
+  const hours = Math.floor(minutes / 60)
+  if (hours < 24) return `${hours}h ago`
+  const days = Math.floor(hours / 24)
+  return `${days}d ago`
+}
 
 export default function Home() {
   const router = useRouter()
   const { data: me, isLoading: loading, error } = useProfile()
+  const { data: overview, isLoading: overviewLoading } = useDashboardOverview()
 
   useEffect(() => {
     if (error) router.push("/login")
@@ -166,11 +123,53 @@ export default function Home() {
     link.roles.includes(me.role),
   )
 
+  const stats = [
+    {
+      label: "Total Jobs",
+      value: (overview?.total_jobs ?? 0).toLocaleString(),
+      hint: overview
+        ? `${overview.active_jobs.toLocaleString()} active · ${overview.expired_jobs.toLocaleString()} expired`
+        : "Loading…",
+      tone: "blue" as const,
+      icon: BriefcaseBusiness,
+    },
+    {
+      label: "Enriched Contacts",
+      value: (overview?.enriched_contacts ?? 0).toLocaleString(),
+      hint: overview
+        ? `${overview.classified_jobs.toLocaleString()} jobs classified`
+        : "Loading…",
+      tone: "amber" as const,
+      icon: Sparkles,
+    },
+    {
+      label: "Active Sources",
+      value: String(overview?.active_sources ?? 0),
+      hint: overview
+        ? `${overview.healthy_sources} healthy`
+        : "Loading…",
+      tone: "rose" as const,
+      icon: Cable,
+    },
+    {
+      label: "Demand Change",
+      value:
+        overview && overview.avg_demand_change !== 0
+          ? `${overview.avg_demand_change > 0 ? "+" : ""}${overview.avg_demand_change.toFixed(1)}%`
+          : "0%",
+      hint: "30-day average across roles",
+      tone: "green" as const,
+      icon: TrendingUp,
+    },
+  ]
+
+  const recentRuns = overview?.recent_runs ?? []
+
   return (
-    <AppShell user={me} loading={loading}>
+    <AppShell user={me} loading={loading || overviewLoading}>
       <div className="flex flex-col gap-6 p-4 sm:p-6">
         <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
-          {STAT_CARDS.map((stat) => (
+          {stats.map((stat) => (
             <StatCard
               key={stat.label}
               label={stat.label}
@@ -229,31 +228,45 @@ export default function Home() {
                   Recent Activity
                 </CardTitle>
               </div>
-              <CardDescription>Latest updates across your workspace</CardDescription>
+              <CardDescription>Latest ingestion runs from the pipeline</CardDescription>
             </CardHeader>
             <CardContent>
-              <div className="flex flex-col gap-4">
-                {RECENT_ACTIVITY.map((activity, i) => (
-                  <div key={i} className="flex items-start gap-3">
-                    <span
-                      className={cn(
-                        "mt-1.5 size-2 shrink-0 rounded-full",
-                        activity.status === "success" && "bg-primary",
-                        activity.status === "warning" && "bg-chart-4",
-                        activity.status === "info" && "bg-chart-2",
-                      )}
-                    />
-                    <div className="min-w-0 flex-1">
-                      <p className="truncate text-sm font-medium text-foreground">
-                        {activity.action}
-                      </p>
-                      <p className="text-xs text-muted-foreground">
-                        {activity.source} &middot; {activity.time}
-                      </p>
+              {recentRuns.length === 0 ? (
+                <EmptyState
+                  icon={Clock3}
+                  title="No recent runs"
+                  description="Ingestion activity will appear here after the first pipeline run."
+                />
+              ) : (
+                <div className="flex flex-col gap-4">
+                  {recentRuns.map((run) => (
+                    <div key={run.id} className="flex items-start gap-3">
+                      <span
+                        className={cn(
+                          "mt-1.5 size-2 shrink-0 rounded-full",
+                          run.status === "completed" && "bg-primary",
+                          run.status === "failed" && "bg-destructive",
+                          run.status === "partial" && "bg-chart-4",
+                          (run.status === "running" || run.status === "pending") &&
+                            "bg-chart-2",
+                        )}
+                      />
+                      <div className="min-w-0 flex-1">
+                        <p className="truncate text-sm font-medium text-foreground">
+                          {run.provider} · {run.status}
+                        </p>
+                        <p className="text-xs text-muted-foreground">
+                          {run.fetched_count.toLocaleString()} fetched
+                          {run.error_count > 0
+                            ? ` · ${run.error_count} errors`
+                            : ""}{" "}
+                          &middot; {relativeTime(run.started_at)}
+                        </p>
+                      </div>
                     </div>
-                  </div>
-                ))}
-              </div>
+                  ))}
+                </div>
+              )}
             </CardContent>
           </Card>
         </div>

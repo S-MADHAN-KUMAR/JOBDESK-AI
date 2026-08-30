@@ -26,8 +26,10 @@ from core.ingestion_models import (
     MasterTechnology,
     MasterSkill,
 )
-from core.models import IngestionRun, JobSource, RawJob
+from core.models import IngestionRun, IngestionSchedule, JobSource, MarketAlert, RawJob
 from core.permissions import IsAdmin, IsCEOOrManagement, IsMarketAnalyst, IsTrainingManager, IsRecruitmentTeam
+from core.serializers import IngestionScheduleSerializer
+from core.services.scheduling import calculate_next_run
 from core.tasks import (
     run_all_provider_ingestions,
     run_provider_ingestion,
@@ -87,7 +89,40 @@ class IngestionRunViewSet(viewsets.ReadOnlyModelViewSet):
             'provider': run.provider.provider_code,
             'error_count': run.error_count,
             'errors': run.error_logs,
-    })
+        })
+
+
+class IngestionScheduleViewSet(viewsets.ModelViewSet):
+    """CRUD for server-persisted ingestion schedules."""
+
+    permission_classes = [IsAdmin]
+    serializer_class = IngestionScheduleSerializer
+    pagination_class = None
+    http_method_names = ['get', 'post', 'patch', 'delete', 'head', 'options']
+
+    def get_queryset(self):
+        return IngestionSchedule.objects.all().order_by('-created_at')
+
+    def create(self, request, *args, **kwargs):
+        serializer = self.get_serializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        self.perform_create(serializer)
+        return Response(serializer.data, status=status.HTTP_201_CREATED)
+
+    @action(detail=True, methods=['post'])
+    def toggle(self, request, pk=None):
+        schedule = self.get_object()
+        schedule.enabled = not schedule.enabled
+        if schedule.enabled:
+            schedule.next_run = calculate_next_run(
+                frequency=schedule.frequency,
+                time_str=schedule.time,
+                day_of_week=schedule.day_of_week,
+                day_of_month=schedule.day_of_month,
+                start_date=schedule.start_date,
+            )
+        schedule.save(update_fields=['enabled', 'next_run', 'updated_at'])
+        return Response(IngestionScheduleSerializer(schedule).data)
 
 
 class CanonicalJobViewSet(viewsets.ReadOnlyModelViewSet):
@@ -1220,6 +1255,18 @@ def dashboard_overview(request):
         if r.get('ended_at'):
             r['ended_at'] = r['ended_at'].isoformat()
 
+    from enrichment.models import Contact
+
+    active_sources = JobSource.objects.filter(is_active=True).count()
+    healthy_sources = JobSource.objects.filter(
+        is_active=True, health_status='healthy'
+    ).count()
+    enriched_contacts = Contact.objects.count()
+    demand_avg = (
+        JobDemandMovement.objects.filter(period_days=30)
+        .aggregate(avg=Avg('change_percentage'))['avg']
+    )
+
     return Response({
         'total_jobs': total_jobs,
         'active_jobs': active_jobs,
@@ -1227,6 +1274,10 @@ def dashboard_overview(request):
         'unique_companies': companies,
         'classified_jobs': classified,
         'avg_confidence': round(float(avg_confidence), 3),
+        'active_sources': active_sources,
+        'healthy_sources': healthy_sources,
+        'enriched_contacts': enriched_contacts,
+        'avg_demand_change': round(float(demand_avg), 1) if demand_avg is not None else 0.0,
         'experience_bands': [
             {'seniority': e['seniority'] or 'unknown', 'count': e['count']}
             for e in exp_bands
@@ -1241,60 +1292,84 @@ def dashboard_overview(request):
     })
 
 
+def _upsert_alert(fingerprint: str, **fields) -> MarketAlert:
+    alert, created = MarketAlert.objects.get_or_create(
+        fingerprint=fingerprint,
+        defaults=fields,
+    )
+    if not created:
+        for key, value in fields.items():
+            setattr(alert, key, value)
+        alert.save()
+    return alert
+
+
+def _serialize_alert(alert: MarketAlert) -> dict:
+    return {
+        'id': str(alert.id),
+        'fingerprint': alert.fingerprint,
+        'severity': alert.severity,
+        'category': alert.category,
+        'title': alert.title,
+        'message': alert.message,
+        'role_category': alert.role_category or None,
+        'company_id': alert.company_id or None,
+        'company_name': alert.company_name or None,
+        'provider': alert.provider or None,
+        'metric': alert.metric,
+        'created_at': alert.created_at.isoformat(),
+        'dismissed_at': alert.dismissed_at.isoformat() if alert.dismissed_at else None,
+    }
+
+
 @api_view(['GET'])
 @permission_classes([IsAuthenticated])
 def market_alerts(request):
-    """Derived market/system alerts (no persistent Alert model required)."""
-    alerts = []
-    now = dj_timezone.now().isoformat()
-
+    """Generate current signals, persist them, and return open (or historical) alerts."""
     for m in JobDemandMovement.objects.filter(period_days=30).order_by('-change_percentage')[:20]:
         pct = m.change_percentage or 0
         if pct >= 25:
-            alerts.append({
-                'id': f'spike-{m.id}',
-                'severity': 'high',
-                'category': 'demand_spike',
-                'title': f'Demand spike: {m.role_category}',
-                'message': (
+            _upsert_alert(
+                f'spike-{m.id}',
+                severity='high',
+                category='demand_spike',
+                title=f'Demand spike: {m.role_category}',
+                message=(
                     f'{m.role_category} rose {pct:.1f}% ({m.net_change:+d} net) '
                     f'over {m.period_days} days.'
                 ),
-                'role_category': m.role_category,
-                'metric': pct,
-                'created_at': now,
-            })
+                role_category=m.role_category,
+                metric=pct,
+            )
         elif pct <= -25:
-            alerts.append({
-                'id': f'decline-{m.id}',
-                'severity': 'medium',
-                'category': 'demand_decline',
-                'title': f'Demand decline: {m.role_category}',
-                'message': (
+            _upsert_alert(
+                f'decline-{m.id}',
+                severity='medium',
+                category='demand_decline',
+                title=f'Demand decline: {m.role_category}',
+                message=(
                     f'{m.role_category} fell {pct:.1f}% ({m.net_change:+d} net) '
                     f'over {m.period_days} days.'
                 ),
-                'role_category': m.role_category,
-                'metric': pct,
-                'created_at': now,
-            })
+                role_category=m.role_category,
+                metric=pct,
+            )
 
     for s in EmployerHiringScore.objects.select_related('company').filter(hiring_score__gte=70)[:10]:
         name = s.company.name if s.company else 'Unknown'
-        alerts.append({
-            'id': f'employer-{s.id}',
-            'severity': 'medium',
-            'category': 'recurring_employer',
-            'title': f'High-opportunity employer: {name}',
-            'message': (
+        _upsert_alert(
+            f'employer-{s.id}',
+            severity='medium',
+            category='recurring_employer',
+            title=f'High-opportunity employer: {name}',
+            message=(
                 f'{name} scored {s.hiring_score:.0f} with {s.active_postings} '
                 f'active postings across {s.unique_roles} roles.'
             ),
-            'company_id': str(s.company_id) if s.company_id else '',
-            'company_name': name,
-            'metric': s.hiring_score,
-            'created_at': now,
-        })
+            company_id=str(s.company_id) if s.company_id else '',
+            company_name=name,
+            metric=s.hiring_score,
+        )
 
     failed_runs = (
         IngestionRun.objects.filter(status__in=['failed', 'partial'])
@@ -1303,35 +1378,52 @@ def market_alerts(request):
     )
     for run in failed_runs:
         provider = run.provider.provider_code if run.provider_id else 'unknown'
-        alerts.append({
-            'id': f'run-{run.id}',
-            'severity': 'high' if run.status == 'failed' else 'medium',
-            'category': 'source_failure',
-            'title': f'Source issue: {provider}',
-            'message': (
+        _upsert_alert(
+            f'run-{run.id}',
+            severity='high' if run.status == 'failed' else 'medium',
+            category='source_failure',
+            title=f'Source issue: {provider}',
+            message=(
                 f'Ingestion run {run.status} with {run.error_count} errors / '
                 f'{run.fetched_count} fetched.'
             ),
-            'provider': provider,
-            'metric': run.error_count,
-            'created_at': run.started_at.isoformat() if run.started_at else now,
-        })
+            provider=provider,
+            metric=run.error_count,
+        )
 
     low_conf = JobClassification.objects.filter(confidence_score__lt=0.5).count()
     if low_conf:
-        alerts.append({
-            'id': 'quality-low-confidence',
-            'severity': 'low',
-            'category': 'data_quality',
-            'title': 'Low-confidence classifications',
-            'message': f'{low_conf} jobs have classification confidence below 50%.',
-            'metric': low_conf,
-            'created_at': now,
-        })
+        _upsert_alert(
+            'quality-low-confidence',
+            severity='low',
+            category='data_quality',
+            title='Low-confidence classifications',
+            message=f'{low_conf} jobs have classification confidence below 50%.',
+            metric=low_conf,
+        )
 
+    include_dismissed = request.query_params.get('include_dismissed') == '1'
+    qs = MarketAlert.objects.all()
+    if not include_dismissed:
+        qs = qs.filter(dismissed_at__isnull=True)
+    rows = list(qs[:50])
     severity_rank = {'high': 0, 'medium': 1, 'low': 2}
-    alerts.sort(key=lambda a: (severity_rank.get(a['severity'], 9), a['title']))
-    return Response({'count': len(alerts), 'alerts': alerts[:50]})
+    rows.sort(key=lambda a: (severity_rank.get(a.severity, 9), a.title))
+    alerts = [_serialize_alert(a) for a in rows]
+    return Response({'count': len(alerts), 'alerts': alerts})
+
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def dismiss_market_alert(request, alert_id):
+    try:
+        alert = MarketAlert.objects.get(pk=alert_id)
+    except MarketAlert.DoesNotExist:
+        return Response({'detail': 'Alert not found.'}, status=status.HTTP_404_NOT_FOUND)
+    alert.dismissed_at = dj_timezone.now()
+    alert.dismissed_by = request.user
+    alert.save(update_fields=['dismissed_at', 'dismissed_by', 'updated_at'])
+    return Response(_serialize_alert(alert))
 
 
 @api_view(['GET'])

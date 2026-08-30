@@ -49,7 +49,9 @@ class EnrichmentSource(models.Model):
 
     @staticmethod
     def _fernet():
-        key = getattr(settings, 'FIELD_ENCRYPTION_KEY', None) or settings.SECRET_KEY
+        key = getattr(settings, 'FIELD_ENCRYPTION_KEY', None) or ''
+        if not key:
+            raise ValueError('FIELD_ENCRYPTION_KEY is not configured')
         derived = base64.urlsafe_b64encode(hashlib.sha256(key.encode()).digest())
         return Fernet(derived)
 

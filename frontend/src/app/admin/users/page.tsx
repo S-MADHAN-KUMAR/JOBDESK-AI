@@ -71,6 +71,7 @@ type NewUser = {
   last_name: string
   role: UserRole
   password: string
+  send_invite: boolean
 }
 
 type EditUserForm = {
@@ -87,6 +88,7 @@ const emptyNewUser: NewUser = {
   last_name: "",
   role: "MARKET_ANALYST",
   password: "",
+  send_invite: false,
 }
 
 const ROLE_DOT_CLASSES: Record<UserRole, string> = {
@@ -171,6 +173,14 @@ export default function AdminUsersPage() {
 
   async function createUser(e: React.FormEvent) {
     e.preventDefault()
+    if (newUser.send_invite && !newUser.email.trim()) {
+      toast.error("Email is required to send an invite.")
+      return
+    }
+    if (!newUser.send_invite && newUser.password.length < 8) {
+      toast.error("Password must be at least 8 characters.")
+      return
+    }
     setSaving(true)
     try {
       await apiFetch<User>("/admin/users/", {
@@ -180,7 +190,11 @@ export default function AdminUsersPage() {
       setCreateOpen(false)
       setNewUser(emptyNewUser)
       void refetchUsers()
-      toast.success("User created successfully.")
+      toast.success(
+        newUser.send_invite
+          ? "User created and invite email sent."
+          : "User created successfully.",
+      )
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Failed to create user")
     } finally {
@@ -699,9 +713,20 @@ export default function AdminUsersPage() {
                   }
                   autoComplete="new-password"
                   placeholder="••••••••"
-                  required
+                  required={!newUser.send_invite}
+                  disabled={newUser.send_invite}
                 />
               </div>
+              <label className="flex items-center gap-2 text-sm">
+                <input
+                  type="checkbox"
+                  checked={newUser.send_invite}
+                  onChange={(e) =>
+                    setNewUser({ ...newUser, send_invite: e.target.checked, password: e.target.checked ? "" : newUser.password })
+                  }
+                />
+                Email an invite so they set their own password
+              </label>
             </div>
             <DialogFooter>
               <Button

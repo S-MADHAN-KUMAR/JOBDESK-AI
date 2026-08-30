@@ -22,6 +22,10 @@ import {
 import { AppShell } from "@/components/app-shell"
 import { EmptyState, PageHeader } from "@/components/page-header"
 import { useProfile, useMarketAlerts } from "@/lib/hooks"
+import { dismissMarketAlert } from "@/lib/api"
+import { Button } from "@/components/ui/button"
+import { useQueryClient } from "@tanstack/react-query"
+import { toast } from "sonner"
 import { cn } from "@/lib/utils"
 
 function severityClass(severity: string) {
@@ -37,8 +41,24 @@ function severityClass(severity: string) {
 export default function AlertsPage() {
   const router = useRouter()
   const { data: me, isLoading: profileLoading, error: profileError } = useProfile()
-  const { data, isLoading: alertsLoading } = useMarketAlerts()
+  const queryClient = useQueryClient()
+  const [includeDismissed, setIncludeDismissed] = useState(false)
+  const { data, isLoading: alertsLoading } = useMarketAlerts(includeDismissed)
   const [severity, setSeverity] = useState<string>("all")
+  const [dismissing, setDismissing] = useState<string | null>(null)
+
+  async function onDismiss(id: string) {
+    setDismissing(id)
+    try {
+      await dismissMarketAlert(id)
+      await queryClient.invalidateQueries({ queryKey: ["marketAlerts"] })
+      toast.success("Alert dismissed")
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Failed to dismiss")
+    } finally {
+      setDismissing(null)
+    }
+  }
 
   useEffect(() => {
     if (profileError) router.push("/login")
@@ -59,17 +79,26 @@ export default function AlertsPage() {
           title="Market Alerts"
           description="Severity-ranked signals across roles, employers, and pipeline health"
           actions={
-            <Select value={severity} onValueChange={(v) => v && setSeverity(v)}>
-              <SelectTrigger className="w-[160px]">
-                <SelectValue placeholder="Severity" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="all">All severities</SelectItem>
-                <SelectItem value="high">High</SelectItem>
-                <SelectItem value="medium">Medium</SelectItem>
-                <SelectItem value="low">Low</SelectItem>
-              </SelectContent>
-            </Select>
+            <div className="flex flex-wrap items-center gap-2">
+              <Button
+                variant={includeDismissed ? "default" : "outline"}
+                size="sm"
+                onClick={() => setIncludeDismissed((v) => !v)}
+              >
+                {includeDismissed ? "Showing history" : "Show history"}
+              </Button>
+              <Select value={severity} onValueChange={(v) => v && setSeverity(v)}>
+                <SelectTrigger className="w-[160px]">
+                  <SelectValue placeholder="Severity" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">All severities</SelectItem>
+                  <SelectItem value="high">High</SelectItem>
+                  <SelectItem value="medium">Medium</SelectItem>
+                  <SelectItem value="low">Low</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
           }
         />
 
@@ -139,8 +168,21 @@ export default function AlertsPage() {
                             <span className="tabular-nums">Metric: {alert.metric}</span>
                           ) : null}
                           <span>{new Date(alert.created_at).toLocaleString()}</span>
+                          {alert.dismissed_at ? (
+                            <span>Dismissed {new Date(alert.dismissed_at).toLocaleString()}</span>
+                          ) : null}
                         </div>
                       </div>
+                      {!alert.dismissed_at ? (
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          disabled={dismissing === alert.id}
+                          onClick={() => void onDismiss(alert.id)}
+                        >
+                          Dismiss
+                        </Button>
+                      ) : null}
                     </div>
                   </div>
                 ))}

@@ -22,6 +22,9 @@ import {
   Database,
   GitBranch,
   Settings,
+  Bell,
+  ShieldCheck,
+  Gauge,
 } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { type User, logout } from "@/lib/api"
@@ -58,6 +61,12 @@ const NAV_GROUPS: NavGroup[] = [
         href: "/jobs",
         label: "Job Explorer",
         icon: BriefcaseBusiness,
+        roles: ["ADMIN", "MARKET_ANALYST"],
+      },
+      {
+        href: "/jobs/canonical",
+        label: "Canonical Jobs",
+        icon: Database,
         roles: ["ADMIN", "MARKET_ANALYST"],
       },
       {
@@ -154,11 +163,32 @@ const NAV_GROUPS: NavGroup[] = [
         icon: Building2,
         roles: ["ADMIN", "RECRUITMENT_TEAM"],
       },
+      {
+        href: "/alerts",
+        label: "Market Alerts",
+        icon: Bell,
+        roles: ALL_ROLES,
+      },
+      {
+        href: "/demand",
+        label: "Demand Scores",
+        icon: Gauge,
+        roles: ["ADMIN", "MARKET_ANALYST"],
+      },
+      {
+        href: "/quality",
+        label: "Data Quality",
+        icon: ShieldCheck,
+        roles: ["ADMIN", "MARKET_ANALYST"],
+      },
     ],
   },
 ]
 
 function isActivePath(pathname: string, href: string) {
+  if (href === "/jobs") {
+    return pathname === "/jobs" || /^\/jobs\/[^/]+$/.test(pathname)
+  }
   return pathname === href || (href !== "/" && pathname.startsWith(href))
 }
 

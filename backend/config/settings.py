@@ -29,11 +29,27 @@ environ.Env.read_env(BASE_DIR / '.env')
 # Quick-start development settings - unsuitable for production
 # See https://docs.djangoproject.com/en/6.1/howto/deployment/checklist/
 
-# SECURITY WARNING: keep the secret key used in production secret!
-SECRET_KEY = env('DJANGO_SECRET_KEY', default='django-insecure-change-me-in-production')
-
 # SECURITY WARNING: don't run with debug turned on in production!
 DEBUG = env('DEBUG')
+
+_insecure_secrets = {
+    '',
+    'django-insecure-change-me-in-production',
+    'change-me-to-a-random-secret-key',
+}
+SECRET_KEY = env('DJANGO_SECRET_KEY', default='')
+if SECRET_KEY in _insecure_secrets:
+    if not DEBUG:
+        from django.core.exceptions import ImproperlyConfigured
+        raise ImproperlyConfigured('DJANGO_SECRET_KEY must be set to a strong value in production.')
+    SECRET_KEY = SECRET_KEY or 'django-insecure-dev-only'
+
+FIELD_ENCRYPTION_KEY = env('FIELD_ENCRYPTION_KEY', default='')
+if not FIELD_ENCRYPTION_KEY:
+    if not DEBUG:
+        from django.core.exceptions import ImproperlyConfigured
+        raise ImproperlyConfigured('FIELD_ENCRYPTION_KEY must be set in production.')
+    FIELD_ENCRYPTION_KEY = SECRET_KEY
 
 ALLOWED_HOSTS = env('ALLOWED_HOSTS')
 
@@ -197,6 +213,12 @@ SIMPLE_JWT = {
 
 CORS_ALLOWED_ORIGINS = env('CORS_ALLOWED_ORIGINS')
 CORS_ALLOW_CREDENTIALS = True
+CSRF_TRUSTED_ORIGINS = env.list('CSRF_TRUSTED_ORIGINS', default=CORS_ALLOWED_ORIGINS)
+CSRF_COOKIE_SAMESITE = 'Lax'
+CSRF_COOKIE_SECURE = not DEBUG
+
+JWT_ACCESS_COOKIE = 'da_access'
+JWT_REFRESH_COOKIE = 'da_refresh'
 
 
 # Celery
@@ -221,14 +243,30 @@ ANTHROPIC_API_KEY = env('ANTHROPIC_API_KEY', default='')
 GROQ_API_KEY = env('GROQ_API_KEY', default='')
 
 
-# Email
-# https://docs.djangoproject.com/en/6.1/topics/email/#topic-email-configuration
-
-MAILERS = {
-    'default': {
-        'BACKEND': 'django.core.mail.backends.console.EmailBackend',
-    },
-}
+# Email — prefer Resend when RESEND_API_KEY is set; else SMTP; else console.
+RESEND_API_KEY = env('RESEND_API_KEY', default='')
+EMAIL_BACKEND = env(
+    'EMAIL_BACKEND',
+    default=(
+        'django.core.mail.backends.smtp.EmailBackend'
+        if env('EMAIL_HOST', default='')
+        else 'django.core.mail.backends.console.EmailBackend'
+    ),
+)
+EMAIL_HOST = env('EMAIL_HOST', default='')
+EMAIL_PORT = env.int('EMAIL_PORT', default=587)
+EMAIL_HOST_USER = env('EMAIL_HOST_USER', default='')
+EMAIL_HOST_PASSWORD = env('EMAIL_HOST_PASSWORD', default='')
+EMAIL_USE_TLS = env.bool('EMAIL_USE_TLS', default=True)
+DEFAULT_FROM_EMAIL = env(
+    'DEFAULT_FROM_EMAIL',
+    default=(
+        'DemandAccel <onboarding@resend.dev>'
+        if RESEND_API_KEY
+        else 'DemandAccel <noreply@localhost>'
+    ),
+)
+FRONTEND_URL = env('FRONTEND_URL', default='http://localhost:3000')
 
 # Logging
 # https://docs.djangoproject.com/en/6.1/topics/logging/
@@ -249,6 +287,16 @@ LOGGING = {
     },
     'loggers': {
         'enrichment': {
+            'handlers': ['console'],
+            'level': 'INFO',
+            'propagate': False,
+        },
+        'core.services.email': {
+            'handlers': ['console'],
+            'level': 'INFO',
+            'propagate': False,
+        },
+        'core.views': {
             'handlers': ['console'],
             'level': 'INFO',
             'propagate': False,

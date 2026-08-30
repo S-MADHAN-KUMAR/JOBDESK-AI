@@ -33,9 +33,17 @@ def _truncate(value: str, max_length: int = 255) -> str:
 @shared_task(bind=True, name='core.tasks.run_scheduled_ingestion')
 def run_scheduled_ingestion(self):
     """
-    Main ingestion pipeline task. Runs all active providers sequentially.
-    Scheduled via Celery Beat at configured hour/minute.
+    Legacy nightly catch-all. Skipped when admin-managed schedules exist
+    so the same providers are not ingested twice.
     """
+    from core.models import IngestionSchedule
+
+    if IngestionSchedule.objects.filter(enabled=True).exists():
+        logger.info(
+            'Skipping legacy nightly ingestion; enabled IngestionSchedule rows exist'
+        )
+        return {'skipped': True, 'reason': 'db_schedules_enabled'}
+
     logger.info('Starting scheduled ingestion pipeline')
     active_sources = JobSource.objects.filter(is_active=True)
     results = []
@@ -381,3 +389,147 @@ def run_aggregate_daily_snapshots():
 def run_compute_demand_movements():
     """Celery task wrapper for demand movement computation."""
     return compute_demand_movements()
+
+
+def _schedule_platforms_for_source(schedule, source: JobSource) -> list | None:
+    from core.services.scheduling import platforms_for_provider
+
+    boards = platforms_for_provider(
+        provider_code=source.provider_code,
+        apify_platforms=schedule.apify_platforms,
+        serpapi_platforms=schedule.serpapi_platforms,
+        platforms=schedule.platforms,
+    )
+    return boards or None
+
+
+@shared_task(bind=True, name='core.tasks.run_ingestion_schedule')
+def run_ingestion_schedule(self, schedule_id: str):
+    """Execute one due ingestion schedule and record success/failure."""
+    from core.models import IngestionSchedule
+
+    try:
+        schedule = IngestionSchedule.objects.get(pk=schedule_id)
+    except IngestionSchedule.DoesNotExist:
+        return {'success': False, 'error': 'Schedule not found'}
+
+    base_kwargs = {
+        'keyword': schedule.keyword or '',
+        'location': schedule.location or '',
+        'country': schedule.country or '',
+        'max_pages': schedule.max_pages or 1,
+        'min_salary': schedule.min_salary or 0,
+        'max_salary': schedule.max_salary or 0,
+        'employment_type': schedule.employment_type or '',
+        'work_mode': schedule.work_mode or '',
+        'role': schedule.role or '',
+        'posted_within': schedule.posted_within or '',
+    }
+
+    errors = []
+    try:
+        if schedule.source_id == 'all':
+            sources = JobSource.objects.filter(is_active=True)
+            for source in sources:
+                if not source.has_auth_config():
+                    errors.append(f'{source.provider_code}: credentials not configured')
+                    continue
+                platforms = _schedule_platforms_for_source(schedule, source)
+                result = run_provider_ingestion.run(
+                    source_id=str(source.id),
+                    platforms=platforms,
+                    **base_kwargs,
+                )
+                if isinstance(result, dict) and not result.get('success', True):
+                    errors.append(
+                        f"{source.provider_code}: {result.get('error') or result.get('status')}"
+                    )
+        else:
+            try:
+                source = JobSource.objects.get(pk=schedule.source_id)
+            except JobSource.DoesNotExist:
+                raise ValueError('Source not found')
+            platforms = _schedule_platforms_for_source(schedule, source)
+            result = run_provider_ingestion.run(
+                source_id=str(source.id),
+                platforms=platforms,
+                **base_kwargs,
+            )
+            if isinstance(result, dict) and not result.get('success', True):
+                errors.append(str(result.get('error') or result.get('status') or 'failed'))
+
+        schedule.last_run_status = 'error' if errors else 'success'
+        schedule.last_error = '; '.join(errors)[:2000] if errors else ''
+        schedule.save(update_fields=['last_run_status', 'last_error', 'updated_at'])
+        return {
+            'success': not errors,
+            'schedule_id': schedule_id,
+            'errors': errors,
+        }
+    except Exception as exc:
+        logger.exception('Schedule %s failed: %s', schedule_id, exc)
+        schedule.last_run_status = 'error'
+        schedule.last_error = str(exc)[:2000]
+        schedule.save(update_fields=['last_run_status', 'last_error', 'updated_at'])
+        return {'success': False, 'schedule_id': schedule_id, 'error': str(exc)}
+
+
+@shared_task(name='core.tasks.dispatch_due_ingestion_schedules')
+def dispatch_due_ingestion_schedules():
+    """
+    Claim due schedules and enqueue execution.
+
+    Runs every minute via Celery Beat. Uses row locks so concurrent beat
+    workers do not double-fire the same schedule.
+    """
+    from django.db import transaction
+    from django.db.models import F
+    from core.models import IngestionSchedule
+    from core.services.scheduling import calculate_next_run
+
+    now = datetime.now(timezone.utc)
+    claimed_ids = []
+
+    with transaction.atomic():
+        due_qs = (
+            IngestionSchedule.objects
+            .select_for_update(skip_locked=True)
+            .filter(enabled=True, next_run__isnull=False, next_run__lte=now)
+        )
+        for schedule in due_qs:
+            if schedule.total_runs > 0 and schedule.runs_completed >= schedule.total_runs:
+                schedule.enabled = False
+                schedule.save(update_fields=['enabled', 'updated_at'])
+                continue
+
+            schedule.runs_completed = F('runs_completed') + 1
+            schedule.last_run = now
+            schedule.last_run_status = ''
+            schedule.last_error = ''
+            schedule.save(update_fields=[
+                'runs_completed', 'last_run', 'last_run_status', 'last_error', 'updated_at',
+            ])
+            schedule.refresh_from_db()
+
+            exhausted = schedule.total_runs > 0 and schedule.runs_completed >= schedule.total_runs
+            if schedule.frequency == 'once' or exhausted:
+                schedule.enabled = False
+                schedule.next_run = None
+            else:
+                schedule.next_run = calculate_next_run(
+                    frequency=schedule.frequency,
+                    time_str=schedule.time,
+                    day_of_week=schedule.day_of_week,
+                    day_of_month=schedule.day_of_month,
+                    start_date=schedule.start_date,
+                    after=now,
+                )
+            schedule.save(update_fields=['enabled', 'next_run', 'updated_at'])
+            claimed_ids.append(str(schedule.id))
+
+    for sid in claimed_ids:
+        run_ingestion_schedule.delay(sid)
+
+    if claimed_ids:
+        logger.info('Dispatched %s due ingestion schedule(s)', len(claimed_ids))
+    return {'dispatched': claimed_ids}

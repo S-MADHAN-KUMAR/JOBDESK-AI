@@ -331,10 +331,11 @@ export function useDashboardOverview() {
   })
 }
 
-export function useMarketAlerts() {
+export function useMarketAlerts(includeDismissed = false) {
   return useQuery({
-    queryKey: ["marketAlerts"],
-    queryFn: fetchMarketAlerts,
+    queryKey: ["marketAlerts", includeDismissed],
+    queryFn: () =>
+      fetchMarketAlerts(includeDismissed ? "?include_dismissed=1" : ""),
     staleTime: 60 * 1000,
     gcTime: 5 * 60 * 1000,
   })

@@ -1,5 +1,6 @@
 from django.contrib.auth import get_user_model
 from rest_framework import serializers
+from datetime import date as dj_date
 
 from .ingestion_models import (
     CanonicalJob,
@@ -14,7 +15,8 @@ from .ingestion_models import (
     MasterSkill,
     MasterTechnology,
 )
-from .models import IngestionRun, JobSource, RawJob
+from .models import IngestionRun, IngestionSchedule, JobSource, RawJob
+from .services.scheduling import calculate_next_run
 
 User = get_user_model()
 
@@ -23,10 +25,15 @@ class UserAdminSerializer(serializers.ModelSerializer):
     class Meta:
         model = User
         fields = ['id', 'username', 'email', 'first_name', 'last_name', 'role', 'is_active', 'password']
-        extra_kwargs = {'password': {'write_only': True}}
+        extra_kwargs = {'password': {'write_only': True, 'required': False, 'allow_blank': True}}
 
     def create(self, validated_data):
-        user = User.objects.create_user(**validated_data)
+        password = validated_data.pop('password', None)
+        if password:
+            return User.objects.create_user(password=password, **validated_data)
+        user = User(**validated_data)
+        user.set_unusable_password()
+        user.save()
         return user
 
     def update(self, instance, validated_data):
@@ -258,3 +265,143 @@ class MasterSkillSerializer(serializers.ModelSerializer):
         model = MasterSkill
         fields = ['id', 'name', 'technology', 'technology_name', 'created_at']
         read_only_fields = ['id', 'created_at']
+
+
+class IngestionScheduleSerializer(serializers.ModelSerializer):
+    """CamelCase API shape matching the admin ingestion UI."""
+
+    dayOfWeek = serializers.IntegerField(source='day_of_week', required=False, default=1)
+    dayOfMonth = serializers.IntegerField(source='day_of_month', required=False, default=1)
+    startDate = serializers.DateField(source='start_date', required=False, allow_null=True)
+    totalRuns = serializers.IntegerField(source='total_runs', required=False, default=0)
+    runsCompleted = serializers.IntegerField(source='runs_completed', read_only=True)
+    lastRun = serializers.DateTimeField(source='last_run', read_only=True, allow_null=True)
+    lastRunStatus = serializers.CharField(source='last_run_status', read_only=True, allow_blank=True)
+    lastError = serializers.CharField(source='last_error', read_only=True, allow_blank=True)
+    nextRun = serializers.DateTimeField(source='next_run', read_only=True, allow_null=True)
+    max_pages = serializers.CharField(required=False, allow_blank=True, default='5')
+    min_salary = serializers.CharField(required=False, allow_blank=True, default='')
+    max_salary = serializers.CharField(required=False, allow_blank=True, default='')
+
+    class Meta:
+        model = IngestionSchedule
+        fields = [
+            'id',
+            'source_id',
+            'keyword',
+            'location',
+            'country',
+            'max_pages',
+            'min_salary',
+            'max_salary',
+            'employment_type',
+            'work_mode',
+            'role',
+            'posted_within',
+            'platforms',
+            'apify_platforms',
+            'serpapi_platforms',
+            'frequency',
+            'time',
+            'dayOfWeek',
+            'dayOfMonth',
+            'startDate',
+            'totalRuns',
+            'runsCompleted',
+            'enabled',
+            'lastRun',
+            'lastRunStatus',
+            'lastError',
+            'nextRun',
+            'created_at',
+            'updated_at',
+        ]
+        read_only_fields = [
+            'id',
+            'runsCompleted',
+            'lastRun',
+            'lastRunStatus',
+            'lastError',
+            'nextRun',
+            'created_at',
+            'updated_at',
+        ]
+
+    def _to_int(self, value, default=0):
+        if value in (None, ''):
+            return default
+        try:
+            return max(0, int(value))
+        except (TypeError, ValueError):
+            return default
+
+    def validate_source_id(self, value):
+        value = (value or 'all').strip()
+        if value == 'all' or value == '':
+            return 'all'
+        if not JobSource.objects.filter(pk=value).exists():
+            raise serializers.ValidationError('Source not found.')
+        return value
+
+    def validate_frequency(self, value):
+        allowed = {c[0] for c in IngestionSchedule.Frequency.choices}
+        if value not in allowed:
+            raise serializers.ValidationError('Invalid frequency.')
+        return value
+
+    def create(self, validated_data):
+        validated_data['max_pages'] = max(1, self._to_int(validated_data.get('max_pages'), 5))
+        validated_data['min_salary'] = self._to_int(validated_data.get('min_salary'), 0)
+        validated_data['max_salary'] = self._to_int(validated_data.get('max_salary'), 0)
+        request = self.context.get('request')
+        if request and request.user and request.user.is_authenticated:
+            validated_data['created_by'] = request.user
+        if not validated_data.get('start_date'):
+            validated_data['start_date'] = dj_date.today()
+        instance = IngestionSchedule(**validated_data)
+        instance.next_run = calculate_next_run(
+            frequency=instance.frequency,
+            time_str=instance.time,
+            day_of_week=instance.day_of_week,
+            day_of_month=instance.day_of_month,
+            start_date=instance.start_date,
+        )
+        instance.save()
+        return instance
+
+    def update(self, instance, validated_data):
+        if 'max_pages' in validated_data:
+            validated_data['max_pages'] = max(1, self._to_int(validated_data.get('max_pages'), 5))
+        if 'min_salary' in validated_data:
+            validated_data['min_salary'] = self._to_int(validated_data.get('min_salary'), 0)
+        if 'max_salary' in validated_data:
+            validated_data['max_salary'] = self._to_int(validated_data.get('max_salary'), 0)
+
+        for attr, value in validated_data.items():
+            setattr(instance, attr, value)
+
+        # Recalculate next_run when schedule timing or enabled state changes
+        timing_fields = {
+            'frequency', 'time', 'day_of_week', 'day_of_month', 'start_date', 'enabled',
+        }
+        if timing_fields & set(validated_data.keys()):
+            if instance.enabled:
+                instance.next_run = calculate_next_run(
+                    frequency=instance.frequency,
+                    time_str=instance.time,
+                    day_of_week=instance.day_of_week,
+                    day_of_month=instance.day_of_month,
+                    start_date=instance.start_date,
+                )
+        instance.save()
+        return instance
+
+    def to_representation(self, instance):
+        data = super().to_representation(instance)
+        # Keep UI string fields for form inputs
+        data['max_pages'] = str(instance.max_pages or 5)
+        data['min_salary'] = str(instance.min_salary) if instance.min_salary else ''
+        data['max_salary'] = str(instance.max_salary) if instance.max_salary else ''
+        data['lastRunStatus'] = instance.last_run_status or None
+        data['lastError'] = instance.last_error or None
+        return data

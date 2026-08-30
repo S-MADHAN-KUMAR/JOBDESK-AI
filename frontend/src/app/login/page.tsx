@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation"
 import { Loader2 } from "lucide-react"
 import { toast } from "sonner"
 import { login } from "@/lib/api"
+import { useRedirectIfAuthenticated } from "@/lib/use-redirect-if-authenticated"
 import { useTheme } from "@/components/theme-provider"
 import { ThemeToggle } from "@/components/theme-toggle"
 
@@ -37,6 +38,7 @@ const THEME = {
 
 export default function LoginPage() {
   const router = useRouter()
+  useRedirectIfAuthenticated()
   const { theme } = useTheme()
   const colors = THEME[theme]
   const [username, setUsername] = useState("")
@@ -232,6 +234,15 @@ export default function LoginPage() {
                   )}
                 </button>
               </div>
+            </div>
+            <div className="pt-1 text-center">
+              <a
+                href="/forgot-password"
+                className="text-sm underline-offset-4 hover:underline"
+                style={{ color: colors.textSecondary }}
+              >
+                Forgot password?
+              </a>
             </div>
           </form>
 

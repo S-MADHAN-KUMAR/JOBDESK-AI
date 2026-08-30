@@ -27,34 +27,18 @@ export type User = {
   is_active: boolean
 }
 
-type Tokens = { access: string; refresh: string }
+// Prefer same-origin `/api` (Next rewrite → Django) so auth cookies work with middleware.
+const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "/api"
 
-const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000/api"
-
-const ACCESS_KEY = "demandaccel_access"
-const REFRESH_KEY = "demandaccel_refresh"
-
-function getAccess(): string | null {
-  return window.localStorage.getItem(ACCESS_KEY)
-}
-
-function getRefresh(): string | null {
-  return window.localStorage.getItem(REFRESH_KEY)
-}
-
-function setTokens({ access, refresh }: Tokens) {
-  window.localStorage.setItem(ACCESS_KEY, access)
-  window.localStorage.setItem(REFRESH_KEY, refresh)
-}
-
-function clearTokens() {
-  window.localStorage.removeItem(ACCESS_KEY)
-  window.localStorage.removeItem(REFRESH_KEY)
+function clearLegacyTokens() {
+  window.localStorage.removeItem("demandaccel_access")
+  window.localStorage.removeItem("demandaccel_refresh")
 }
 
 export async function login(username: string, password: string): Promise<User> {
   const res = await fetch(`${API_URL}/auth/login/`, {
     method: "POST",
+    credentials: "include",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ username, password }),
   })
@@ -64,8 +48,7 @@ export async function login(username: string, password: string): Promise<User> {
       typeof detail === "string" ? detail : "Invalid username or password.",
     )
   }
-  const tokens: Tokens = await res.json()
-  setTokens(tokens)
+  clearLegacyTokens()
   return fetchProfile()
 }
 
@@ -95,50 +78,45 @@ export async function changePassword(data: {
   })
 }
 
-let refreshing: Promise<string> | null = null
+let refreshing: Promise<void> | null = null
 
-async function refreshAccess(): Promise<string> {
-  const refresh = getRefresh()
-  if (!refresh) throw new Error("No refresh token")
+async function refreshSession(): Promise<void> {
   const res = await fetch(`${API_URL}/auth/refresh/`, {
     method: "POST",
+    credentials: "include",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ refresh }),
+    body: JSON.stringify({}),
   })
   if (!res.ok) {
-    clearTokens()
     throw new Error("Session expired")
   }
-  const data: Tokens = await res.json()
-  setTokens(data)
-  return data.access
 }
 
 export async function apiFetch<T>(
   path: string,
   options: RequestInit = {},
 ): Promise<T> {
-  const request = async (token: string | null): Promise<Response> => {
+  const request = async (): Promise<Response> => {
     return fetch(`${API_URL}${path}`, {
       ...options,
+      credentials: "include",
       headers: {
         "Content-Type": "application/json",
-        ...(token ? { Authorization: `Bearer ${token}` } : {}),
         ...options.headers,
       },
     })
   }
 
-  let res = await request(getAccess())
+  let res = await request()
 
-  if (res.status === 401 && getRefresh()) {
-    refreshing = refreshing ?? refreshAccess().catch((err) => {
+  if (res.status === 401 && !path.startsWith("/auth/")) {
+    refreshing = refreshing ?? refreshSession().catch((err) => {
       refreshing = null
       throw err
     })
     try {
-      const access = await refreshing
-      res = await request(access)
+      await refreshing
+      res = await request()
     } finally {
       refreshing = null
     }
@@ -175,23 +153,39 @@ export async function apiFetch<T>(
 }
 
 export async function logout(): Promise<void> {
-  const refresh = getRefresh()
-  const access = getAccess()
-  if (access && refresh) {
-    try {
-      await fetch(`${API_URL}/auth/logout/`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${access}`,
-        },
-        body: JSON.stringify({ refresh }),
-      })
-    } catch {
-      // ignore network errors on logout
-    }
+  try {
+    await fetch(`${API_URL}/auth/logout/`, {
+      method: "POST",
+      credentials: "include",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({}),
+    })
+  } catch {
+    // ignore network errors on logout
   }
-  clearTokens()
+  clearLegacyTokens()
+}
+
+export async function requestPasswordReset(email: string): Promise<void> {
+  await apiFetch("/auth/forgot-password/", {
+    method: "POST",
+    body: JSON.stringify({ email }),
+  })
+}
+
+export async function confirmPasswordReset(data: {
+  uid: string
+  token: string
+  password: string
+}): Promise<void> {
+  await apiFetch("/auth/reset-password/", {
+    method: "POST",
+    body: JSON.stringify(data),
+  })
+}
+
+export async function dismissMarketAlert(id: string): Promise<MarketAlert> {
+  return apiFetch<MarketAlert>(`/alerts/${id}/dismiss/`, { method: "POST" })
 }
 
 export async function adminFetch<T>(path: string, options: RequestInit = {}): Promise<T> {
@@ -806,8 +800,6 @@ export function runJobSourceIngestion(
   })
 }
 
-export { getAccess }
-
 // ---------------------------------------------------------------------------
 // Ingestion Pipeline Admin
 // ---------------------------------------------------------------------------
@@ -1008,6 +1000,91 @@ export function triggerManualRun(data: {
   return apiFetch("/admin/ingestion/trigger/", {
     method: "POST",
     body: JSON.stringify(data),
+  })
+}
+
+export type ScheduleFrequency = "once" | "daily" | "weekly" | "monthly"
+
+export type IngestionSchedule = {
+  id: string
+  source_id: string
+  keyword: string
+  location: string
+  country: string
+  max_pages: string
+  min_salary: string
+  max_salary: string
+  employment_type: string
+  work_mode: string
+  role: string
+  posted_within: string
+  platforms: string[]
+  apify_platforms?: string[]
+  serpapi_platforms?: string[]
+  frequency: ScheduleFrequency
+  time: string
+  dayOfWeek: number
+  dayOfMonth: number
+  startDate: string | null
+  totalRuns: number
+  runsCompleted: number
+  enabled: boolean
+  lastRun: string | null
+  lastRunStatus: "success" | "error" | null
+  lastError: string | null
+  nextRun: string | null
+  created_at?: string
+  updated_at?: string
+}
+
+export type IngestionScheduleInput = {
+  source_id: string
+  keyword?: string
+  location?: string
+  country?: string
+  max_pages?: string | number
+  min_salary?: string | number
+  max_salary?: string | number
+  employment_type?: string
+  work_mode?: string
+  role?: string
+  posted_within?: string
+  platforms?: string[]
+  apify_platforms?: string[]
+  serpapi_platforms?: string[]
+  frequency: ScheduleFrequency
+  time: string
+  dayOfWeek?: number
+  dayOfMonth?: number
+  startDate?: string
+  totalRuns?: number
+  enabled?: boolean
+}
+
+export function fetchIngestionSchedules(): Promise<IngestionSchedule[]> {
+  return apiFetch<IngestionSchedule[] | { results: IngestionSchedule[] }>(
+    "/admin/ingestion-schedules/",
+  ).then((data) => (Array.isArray(data) ? data : data.results ?? []))
+}
+
+export function createIngestionSchedule(
+  data: IngestionScheduleInput,
+): Promise<IngestionSchedule> {
+  return apiFetch<IngestionSchedule>("/admin/ingestion-schedules/", {
+    method: "POST",
+    body: JSON.stringify(data),
+  })
+}
+
+export function toggleIngestionSchedule(id: string): Promise<IngestionSchedule> {
+  return apiFetch<IngestionSchedule>(`/admin/ingestion-schedules/${id}/toggle/`, {
+    method: "POST",
+  })
+}
+
+export function deleteIngestionSchedule(id: string): Promise<void> {
+  return apiFetch<void>(`/admin/ingestion-schedules/${id}/`, {
+    method: "DELETE",
   })
 }
 
@@ -1467,6 +1544,10 @@ export type DashboardOverview = {
   unique_companies: number
   classified_jobs: number
   avg_confidence: number
+  active_sources: number
+  healthy_sources: number
+  enriched_contacts: number
+  avg_demand_change: number
   experience_bands: { seniority: string; count: number }[]
   top_skills: { name: string; count: number }[]
   source_mix: { provider: string; count: number }[]
@@ -1490,6 +1571,7 @@ export type DashboardOverview = {
 
 export type MarketAlert = {
   id: string
+  fingerprint?: string
   severity: "high" | "medium" | "low"
   category: string
   title: string
@@ -1500,6 +1582,7 @@ export type MarketAlert = {
   provider?: string
   metric?: number
   created_at: string
+  dismissed_at?: string | null
 }
 
 export type CEODailyBrief = {
@@ -1588,8 +1671,10 @@ export function fetchDashboardOverview(): Promise<DashboardOverview> {
   return apiFetch("/dashboard/overview/")
 }
 
-export function fetchMarketAlerts(): Promise<{ count: number; alerts: MarketAlert[] }> {
-  return apiFetch("/alerts/")
+export function fetchMarketAlerts(
+  query = "",
+): Promise<{ count: number; alerts: MarketAlert[] }> {
+  return apiFetch(`/alerts/${query}`)
 }
 
 export function fetchCEODailyBrief(): Promise<CEODailyBrief> {

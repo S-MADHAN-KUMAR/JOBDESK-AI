@@ -1,3 +1,4 @@
+import logging
 from datetime import datetime, timezone
 
 from django.contrib.auth import get_user_model
@@ -10,8 +11,11 @@ from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 from rest_framework_simplejwt.tokens import AccessToken, RefreshToken
+from rest_framework_simplejwt.views import TokenObtainPairView, TokenRefreshView
 
 from .auth import blacklist_jti
+from .auth_cookies import REFRESH_COOKIE, clear_auth_cookies, set_auth_cookies
+from .throttles import enforce_rate_limit
 from .models import IngestionRun, JobSource, RawJob
 from .permissions import IsAdmin, IsMarketAnalyst
 from .providers import ProviderError, get_provider
@@ -23,6 +27,7 @@ from .serializers import (
 )
 
 User = get_user_model()
+logger = logging.getLogger(__name__)
 
 
 def _truncate(value: str, max_length: int = 255) -> str:
@@ -58,6 +63,24 @@ class AdminUserViewSet(viewsets.ModelViewSet):
     queryset = User.objects.all().order_by('-id')
     serializer_class = UserAdminSerializer
     permission_classes = [IsAdmin]
+
+    def perform_create(self, serializer):
+        user = serializer.save()
+        if self.request.data.get('send_invite') and user.email:
+            from core.services.email import send_password_link
+            send_password_link(user, invite=True)
+
+    @action(detail=True, methods=['post'], url_path='invite')
+    def invite(self, request, pk=None):
+        user = self.get_object()
+        if not user.email:
+            return Response(
+                {'detail': 'User has no email address.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        from core.services.email import send_password_link
+        send_password_link(user, invite=True)
+        return Response({'detail': f'Invite sent to {user.email}.'})
 
 
 class ProfileView(APIView):
@@ -386,21 +409,114 @@ class JobSourceViewSet(viewsets.ModelViewSet):
             }, status=status.HTTP_200_OK)
 
 
-class LogoutView(APIView):
-    """Blacklists the access token jti in Redis and the refresh token in the DB."""
+class CookieTokenObtainPairView(TokenObtainPairView):
+    permission_classes = [AllowAny]
 
-    permission_classes = [IsAuthenticated]
+    def post(self, request, *args, **kwargs):
+        enforce_rate_limit(request, 'login', 8, 15 * 60)
+        response = super().post(request, *args, **kwargs)
+        if response.status_code == 200:
+            set_auth_cookies(response, response.data['access'], response.data['refresh'])
+            response.data = {'detail': 'ok'}
+        return response
+
+
+class CookieTokenRefreshView(TokenRefreshView):
+    permission_classes = [AllowAny]
+
+    def post(self, request, *args, **kwargs):
+        enforce_rate_limit(request, 'refresh', 30, 15 * 60)
+        refresh = request.COOKIES.get(REFRESH_COOKIE) or request.data.get('refresh')
+        if not refresh:
+            return Response({'detail': 'No refresh token.'}, status=status.HTTP_401_UNAUTHORIZED)
+        serializer = self.get_serializer(data={'refresh': refresh})
+        serializer.is_valid(raise_exception=True)
+        data = serializer.validated_data
+        response = Response({'detail': 'ok'})
+        set_auth_cookies(response, data['access'], data.get('refresh'))
+        return response
+
+
+class PasswordResetRequestView(APIView):
+    permission_classes = [AllowAny]
+
+    def post(self, request):
+        enforce_rate_limit(request, 'forgot-password', 5, 15 * 60)
+        email = (request.data.get('email') or '').strip()
+        if email:
+            user = User.objects.filter(email__iexact=email, is_active=True).first()
+            if user:
+                from core.services.email import send_password_link
+                try:
+                    send_password_link(user, invite=False)
+                except Exception as exc:
+                    logger.exception('Forgot-password email failed for user_id=%s: %s', user.pk, exc)
+                    payload = {
+                        'detail': (
+                            'Could not send reset email. Check Resend API key, '
+                            'from-address/domain, daily quota, and that the '
+                            'recipient is allowed on your Resend plan.'
+                        ),
+                    }
+                    from django.conf import settings as dj_settings
+                    if dj_settings.DEBUG:
+                        payload['error'] = str(exc)
+                    return Response(payload, status=status.HTTP_502_BAD_GATEWAY)
+            else:
+                logger.info('Forgot-password: no active user for email=%s', email)
+        return Response({'detail': 'If that email exists, a reset link was sent.'})
+
+
+class PasswordResetConfirmView(APIView):
+    permission_classes = [AllowAny]
+
+    def post(self, request):
+        enforce_rate_limit(request, 'reset-password', 8, 15 * 60)
+        from django.contrib.auth.tokens import default_token_generator
+        from django.utils.http import urlsafe_base64_decode
+
+        uid = request.data.get('uid') or ''
+        token = request.data.get('token') or ''
+        password = request.data.get('password') or ''
+        if len(password) < 8:
+            return Response(
+                {'password': ['Password must be at least 8 characters.']},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        try:
+            user_id = urlsafe_base64_decode(uid).decode()
+            user = User.objects.get(pk=user_id)
+        except Exception:
+            return Response({'detail': 'Invalid reset link.'}, status=status.HTTP_400_BAD_REQUEST)
+        if not default_token_generator.check_token(user, token):
+            return Response({'detail': 'Reset link is invalid or expired.'}, status=status.HTTP_400_BAD_REQUEST)
+        user.set_password(password)
+        user.save(update_fields=['password'])
+        return Response({'detail': 'Password updated. You can sign in now.'})
+
+
+class LogoutView(APIView):
+    """Blacklists tokens when present and always clears auth cookies."""
+
+    permission_classes = [AllowAny]
 
     def post(self, request):
         now = datetime.now(timezone.utc)
+        try:
+            if request.auth:
+                access = request.auth if isinstance(request.auth, AccessToken) else AccessToken(str(request.auth))
+                ttl = int(access['exp']) - int(now.timestamp())
+                if ttl > 0:
+                    blacklist_jti(access['jti'], ttl)
+        except Exception:
+            pass
 
-        access = request.auth if isinstance(request.auth, AccessToken) else AccessToken(request.auth)
-        ttl = int(access['exp']) - int(now.timestamp())
-        blacklist_jti(access['jti'], ttl)
-
-        refresh_token = request.data.get('refresh')
+        refresh_token = request.data.get('refresh') or request.COOKIES.get(REFRESH_COOKIE)
         if refresh_token:
-            token = RefreshToken(refresh_token)
-            token.blacklist()
+            try:
+                RefreshToken(refresh_token).blacklist()
+            except Exception:
+                pass
 
-        return Response({'detail': 'Successfully logged out.'}, status=status.HTTP_200_OK)
+        response = Response({'detail': 'Successfully logged out.'}, status=status.HTTP_200_OK)
+        return clear_auth_cookies(response)

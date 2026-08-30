@@ -41,12 +41,16 @@ app.conf.beat_schedule = {
         "task": "core.tasks.run_scheduled_ingestion",
         "schedule": crontab(hour=_ingestion_hour, minute=_ingestion_minute),
     },
+    "dispatch-due-ingestion-schedules": {
+        "task": "core.tasks.dispatch_due_ingestion_schedules",
+        "schedule": crontab(minute="*"),
+    },
     "aggregate-daily-snapshots": {
         "task": "core.tasks.aggregate_daily_snapshots",
         "schedule": crontab(hour=2, minute=30),
     },
     "compute-demand-movements": {
-        "task": "core.tasks.compute_demand_movements",
+        "task": "core.tasks.compute_demand_movements_task",
         "schedule": crontab(hour=3, minute=0),
     },
 }

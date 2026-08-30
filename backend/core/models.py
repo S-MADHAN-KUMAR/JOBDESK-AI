@@ -66,7 +66,9 @@ class JobSource(models.Model):
 
     @staticmethod
     def _fernet():
-        key = getattr(settings, 'FIELD_ENCRYPTION_KEY', None) or settings.SECRET_KEY
+        key = getattr(settings, 'FIELD_ENCRYPTION_KEY', None) or ''
+        if not key:
+            raise ValueError('FIELD_ENCRYPTION_KEY is not configured')
         derived = base64.urlsafe_b64encode(hashlib.sha256(key.encode()).digest())
         return Fernet(derived)
 
@@ -189,6 +191,110 @@ class RawJob(models.Model):
 
     def __str__(self):
         return f"{self.provider_code}:{self.external_id}"
+
+
+class IngestionSchedule(models.Model):
+    """Admin-managed recurring/one-time ingestion schedules (server-side)."""
+
+    class Frequency(models.TextChoices):
+        ONCE = 'once', 'One-time'
+        DAILY = 'daily', 'Daily'
+        WEEKLY = 'weekly', 'Weekly'
+        MONTHLY = 'monthly', 'Monthly'
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    # 'all' or a JobSource UUID string
+    source_id = models.CharField(max_length=64, default='all')
+    keyword = models.CharField(max_length=255, blank=True, default='')
+    location = models.CharField(max_length=255, blank=True, default='')
+    country = models.CharField(max_length=100, blank=True, default='India')
+    max_pages = models.PositiveIntegerField(default=5)
+    min_salary = models.PositiveIntegerField(default=0)
+    max_salary = models.PositiveIntegerField(default=0)
+    employment_type = models.CharField(max_length=50, blank=True, default='')
+    work_mode = models.CharField(max_length=50, blank=True, default='')
+    role = models.CharField(max_length=255, blank=True, default='')
+    posted_within = models.CharField(max_length=50, blank=True, default='')
+    platforms = models.JSONField(default=list, blank=True)
+    apify_platforms = models.JSONField(default=list, blank=True)
+    serpapi_platforms = models.JSONField(default=list, blank=True)
+    frequency = models.CharField(
+        max_length=20,
+        choices=Frequency.choices,
+        default=Frequency.DAILY,
+    )
+    time = models.CharField(max_length=20, default='9:00 AM')
+    day_of_week = models.PositiveSmallIntegerField(
+        default=1,
+        help_text='JS-style weekday: 0=Sunday .. 6=Saturday',
+    )
+    day_of_month = models.PositiveSmallIntegerField(default=1)
+    start_date = models.DateField(null=True, blank=True)
+    total_runs = models.PositiveIntegerField(
+        default=0,
+        help_text='0 means unlimited',
+    )
+    runs_completed = models.PositiveIntegerField(default=0)
+    enabled = models.BooleanField(default=True)
+    last_run = models.DateTimeField(null=True, blank=True)
+    last_run_status = models.CharField(max_length=20, blank=True, default='')
+    last_error = models.TextField(blank=True, default='')
+    next_run = models.DateTimeField(null=True, blank=True, db_index=True)
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='ingestion_schedules',
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ['-created_at']
+        indexes = [
+            models.Index(fields=['enabled', 'next_run']),
+        ]
+
+    def __str__(self):
+        return f"{self.frequency} @ {self.time} ({self.keyword or 'any'})"
+
+
+class MarketAlert(models.Model):
+    """Persisted market/ops alert with dismiss history."""
+
+    class Severity(models.TextChoices):
+        HIGH = 'high', 'High'
+        MEDIUM = 'medium', 'Medium'
+        LOW = 'low', 'Low'
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    fingerprint = models.CharField(max_length=120, unique=True, db_index=True)
+    severity = models.CharField(max_length=16, choices=Severity.choices)
+    category = models.CharField(max_length=64)
+    title = models.CharField(max_length=255)
+    message = models.TextField()
+    role_category = models.CharField(max_length=255, blank=True, default='')
+    company_id = models.CharField(max_length=64, blank=True, default='')
+    company_name = models.CharField(max_length=255, blank=True, default='')
+    provider = models.CharField(max_length=64, blank=True, default='')
+    metric = models.FloatField(null=True, blank=True)
+    dismissed_at = models.DateTimeField(null=True, blank=True)
+    dismissed_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='dismissed_alerts',
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ['-created_at']
+
+    def __str__(self):
+        return self.title
 
 
 # Import ingestion pipeline models so Django detects them for migrations
