@@ -27,8 +27,7 @@ export type User = {
   is_active: boolean
 }
 
-// Prefer same-origin `/api` (Next rewrite → Django) so auth cookies work with middleware.
-const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "/api"
+const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000/api"
 
 function clearLegacyTokens() {
   window.localStorage.removeItem("demandaccel_access")

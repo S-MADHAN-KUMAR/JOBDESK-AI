@@ -64,12 +64,6 @@ const NAV_GROUPS: NavGroup[] = [
         roles: ["ADMIN", "MARKET_ANALYST"],
       },
       {
-        href: "/jobs/canonical",
-        label: "Canonical Jobs",
-        icon: Database,
-        roles: ["ADMIN", "MARKET_ANALYST"],
-      },
-      {
         href: "/enrichment",
         label: "Enrichment",
         icon: UserSearch,

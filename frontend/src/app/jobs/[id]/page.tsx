@@ -76,9 +76,9 @@ export default function JobTraceabilityPage() {
                 action={
                   <Button
                     variant="outline"
-                    render={<Link href="/jobs/canonical" />}
+                    render={<Link href="/jobs" />}
                   >
-                    Browse Canonical Jobs
+                    Back to Job Explorer
                   </Button>
                 }
               />

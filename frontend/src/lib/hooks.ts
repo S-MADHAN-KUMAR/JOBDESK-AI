@@ -35,7 +35,6 @@ import {
   fetchCompanyDetail,
   fetchTrainingRecommendations,
   fetchJobTraceability,
-  fetchCanonicalJobs,
   apiFetch,
   type User,
   type RawJob,
@@ -385,23 +384,5 @@ export function useJobTraceability(jobId: string) {
     enabled: Boolean(jobId),
     staleTime: 60 * 1000,
     gcTime: 5 * 60 * 1000,
-  })
-}
-
-export function useCanonicalJobs(params: {
-  search?: string
-  work_mode?: string
-  seniority?: string
-  status?: string
-  company?: string
-  company_id?: string
-  page?: number
-  page_size?: number
-} = {}) {
-  return useQuery({
-    queryKey: ["canonicalJobs", params],
-    queryFn: () => fetchCanonicalJobs(params),
-    staleTime: 30 * 1000,
-    gcTime: 2 * 60 * 1000,
   })
 }
