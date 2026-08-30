@@ -1,6 +1,7 @@
 "use client"
 
 import { useEffect, useState } from "react"
+import Link from "next/link"
 import { useRouter } from "next/navigation"
 import { motion } from "framer-motion"
 import {
@@ -8,9 +9,12 @@ import {
   Building2,
   MapPin,
   TrendingUp,
+  TrendingDown,
   Users,
   Briefcase,
   AlertTriangle,
+  Sparkles,
+  ListChecks,
 } from "lucide-react"
 import {
   BarChart,
@@ -31,8 +35,15 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card"
+import { Badge } from "@/components/ui/badge"
 import { AppShell } from "@/components/app-shell"
-import { useProfile, useExecutiveSummary, useCEODemandMovements, useCEOSkillSummary } from "@/lib/hooks"
+import {
+  useProfile,
+  useExecutiveSummary,
+  useCEODemandMovements,
+  useCEOSkillSummary,
+  useCEODailyBrief,
+} from "@/lib/hooks"
 
 const CHART_COLORS = ["hsl(142,55%,50%)", "hsl(35,85%,55%)", "hsl(220,65%,55%)", "hsl(270,60%,55%)", "hsl(160,50%,45%)"]
 
@@ -70,12 +81,13 @@ export default function CEODashboardPage() {
   const { data: summary, isLoading: summaryLoading } = useExecutiveSummary()
   const { data: movementsData, isLoading: movementsLoading } = useCEODemandMovements(30)
   const { data: skills, isLoading: skillsLoading } = useCEOSkillSummary()
+  const { data: brief, isLoading: briefLoading } = useCEODailyBrief()
 
   useEffect(() => {
     if (profileError) router.push("/login")
   }, [profileError, router])
 
-  const loading = profileLoading || summaryLoading || movementsLoading || skillsLoading
+  const loading = profileLoading || summaryLoading || movementsLoading || skillsLoading || briefLoading
   const movements = movementsData?.movements ?? []
 
   if (!me) return null
@@ -112,13 +124,134 @@ export default function CEODashboardPage() {
           animate={{ opacity: 1, y: 0 }}
           transition={{ duration: 0.4 }}
         >
-            <h1 className="font-heading text-2xl font-bold tracking-tight text-foreground">
+          <h1 className="font-heading text-2xl font-bold tracking-tight text-foreground">
             Executive Summary
           </h1>
           <p className="text-sm text-muted-foreground">
             High-level market oversight and strategic intelligence
           </p>
         </motion.div>
+
+        {brief && (
+          <motion.div custom={0} variants={fadeUp} initial="hidden" animate="visible">
+            <Card className="border-primary/20 bg-primary/5">
+              <CardHeader className="pb-3">
+                <CardTitle className="flex items-center gap-2 text-base">
+                  <Sparkles className="size-4 text-primary" />
+                  Daily Intelligence Brief
+                </CardTitle>
+                <p className="text-xs text-muted-foreground">
+                  Generated {new Date(brief.generated_at).toLocaleString()}
+                </p>
+              </CardHeader>
+              <CardContent className="space-y-4">
+                <p className="text-sm font-medium leading-relaxed text-foreground">
+                  {brief.headline}
+                </p>
+
+                <div className="flex flex-wrap gap-4 text-sm">
+                  <span className="tabular-nums text-muted-foreground">
+                    Active: <strong className="text-foreground">{brief.active_jobs.toLocaleString()}</strong>
+                  </span>
+                  <span className="tabular-nums text-muted-foreground">
+                    Total: <strong className="text-foreground">{brief.total_jobs.toLocaleString()}</strong>
+                  </span>
+                </div>
+
+                <div className="grid gap-4 lg:grid-cols-2">
+                  <div>
+                    <p className="mb-2 flex items-center gap-1.5 text-xs font-medium text-muted-foreground">
+                      <TrendingUp className="size-3.5 text-emerald-600" />
+                      Rising Roles
+                    </p>
+                    <div className="flex flex-wrap gap-1.5">
+                      {brief.rising_roles.length === 0 ? (
+                        <span className="text-xs text-muted-foreground">None</span>
+                      ) : (
+                        brief.rising_roles.map((r) => (
+                          <Badge
+                            key={r.role_category}
+                            variant="outline"
+                            className="border-transparent bg-emerald-500/10 text-emerald-700 dark:text-emerald-400"
+                          >
+                            {r.role_category}
+                            <span className="ml-1 opacity-70">
+                              +{r.change_percentage.toFixed(0)}%
+                            </span>
+                          </Badge>
+                        ))
+                      )}
+                    </div>
+                  </div>
+                  <div>
+                    <p className="mb-2 flex items-center gap-1.5 text-xs font-medium text-muted-foreground">
+                      <TrendingDown className="size-3.5 text-red-600" />
+                      Declining Roles
+                    </p>
+                    <div className="flex flex-wrap gap-1.5">
+                      {brief.declining_roles.length === 0 ? (
+                        <span className="text-xs text-muted-foreground">None</span>
+                      ) : (
+                        brief.declining_roles.map((r) => (
+                          <Badge
+                            key={r.role_category}
+                            variant="outline"
+                            className="border-transparent bg-red-500/10 text-red-700 dark:text-red-400"
+                          >
+                            {r.role_category}
+                            <span className="ml-1 opacity-70">
+                              {r.change_percentage.toFixed(0)}%
+                            </span>
+                          </Badge>
+                        ))
+                      )}
+                    </div>
+                  </div>
+                </div>
+
+                {brief.priority_employers.length > 0 && (
+                  <div>
+                    <p className="mb-2 text-xs font-medium text-muted-foreground">
+                      Priority Employers
+                    </p>
+                    <div className="flex flex-wrap gap-2">
+                      {brief.priority_employers.map((e) => (
+                        <Link
+                          key={e.company_id}
+                          href={`/companies/${e.company_id}`}
+                          className="inline-flex items-center gap-2 rounded-full border bg-card px-3 py-1 text-xs font-medium transition-colors hover:border-primary/40 hover:bg-primary/5"
+                        >
+                          <Building2 className="size-3 text-primary" />
+                          {e.company_name}
+                          <span className="tabular-nums text-muted-foreground">
+                            score {e.hiring_score.toFixed(0)}
+                          </span>
+                        </Link>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {brief.training_actions.length > 0 && (
+                  <div>
+                    <p className="mb-2 flex items-center gap-1.5 text-xs font-medium text-muted-foreground">
+                      <ListChecks className="size-3.5" />
+                      Training Actions
+                    </p>
+                    <ul className="space-y-1.5">
+                      {brief.training_actions.map((action, i) => (
+                        <li key={i} className="flex items-start gap-2 text-sm">
+                          <span className="mt-1.5 size-1.5 shrink-0 rounded-full bg-primary" />
+                          <span>{action}</span>
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
+              </CardContent>
+            </Card>
+          </motion.div>
+        )}
 
         {summary && (
           <div className="grid gap-4 sm:grid-cols-3">
@@ -129,7 +262,7 @@ export default function CEODashboardPage() {
             ].map((stat, i) => (
               <motion.div
                 key={stat.label}
-                custom={i}
+                custom={i + 1}
                 variants={fadeUp}
                 initial="hidden"
                 animate="visible"

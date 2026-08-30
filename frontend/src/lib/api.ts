@@ -1455,3 +1455,167 @@ export function fetchEmployerScores(minScore?: number, maxScore?: number): Promi
   const qs = params.toString()
   return apiFetch(`/recruitment/employer-scores/${qs ? `?${qs}` : ""}`)
 }
+
+// ---------------------------------------------------------------------------
+// Dashboard / Alerts / Demand / Company / Training recommendations
+// ---------------------------------------------------------------------------
+
+export type DashboardOverview = {
+  total_jobs: number
+  active_jobs: number
+  expired_jobs: number
+  unique_companies: number
+  classified_jobs: number
+  avg_confidence: number
+  experience_bands: { seniority: string; count: number }[]
+  top_skills: { name: string; count: number }[]
+  source_mix: { provider: string; count: number }[]
+  top_demand_movers: {
+    role_category: string
+    net_change: number
+    change_percentage: number
+    active_jobs_end: number
+    new_postings: number
+  }[]
+  recent_runs: {
+    id: string
+    status: string
+    fetched_count: number
+    error_count: number
+    started_at: string | null
+    ended_at: string | null
+    provider: string
+  }[]
+}
+
+export type MarketAlert = {
+  id: string
+  severity: "high" | "medium" | "low"
+  category: string
+  title: string
+  message: string
+  role_category?: string
+  company_id?: string
+  company_name?: string
+  provider?: string
+  metric?: number
+  created_at: string
+}
+
+export type CEODailyBrief = {
+  generated_at: string
+  headline: string
+  active_jobs: number
+  total_jobs: number
+  rising_roles: {
+    role_category: string
+    net_change: number
+    change_percentage: number
+    new_postings: number
+  }[]
+  declining_roles: {
+    role_category: string
+    net_change: number
+    change_percentage: number
+    expired_postings: number
+  }[]
+  priority_employers: {
+    company_id: string
+    company_name: string
+    hiring_score: number
+    active_postings: number
+    unique_roles: number
+  }[]
+  recommended_technologies: { name: string; count: number }[]
+  training_actions: string[]
+}
+
+export type DemandScore = {
+  role_category: string
+  period_days: number
+  demand_score: number
+  active_jobs: number
+  net_change: number
+  change_percentage: number
+  new_postings: number
+  band: "hot" | "warm" | "cool" | "cold"
+}
+
+export type CompanyDetail = {
+  company: {
+    id: string
+    name: string
+    normalized_name: string
+    domain: string
+    location: string
+    website: string
+  }
+  stats: {
+    total_jobs: number
+    active_jobs: number
+    unique_roles: number
+  }
+  hiring_score: {
+    hiring_score: number
+    total_postings: number
+    active_postings: number
+    unique_roles: number
+    period_start: string | null
+    period_end: string | null
+  }
+  role_breakdown: { role_category: string; count: number }[]
+  recent_jobs: {
+    id: string
+    title: string
+    location_raw: string
+    status: string
+    seniority: string
+    work_mode: string
+    last_seen: string | null
+  }[]
+}
+
+export type TrainingRecommendation = {
+  type: string
+  priority: string
+  title: string
+  detail: string
+  role_category?: string
+  technology?: string
+}
+
+export function fetchDashboardOverview(): Promise<DashboardOverview> {
+  return apiFetch("/dashboard/overview/")
+}
+
+export function fetchMarketAlerts(): Promise<{ count: number; alerts: MarketAlert[] }> {
+  return apiFetch("/alerts/")
+}
+
+export function fetchCEODailyBrief(): Promise<CEODailyBrief> {
+  return apiFetch("/ceo/daily-brief/")
+}
+
+export function fetchDemandScores(period?: number): Promise<{ period_days: number; scores: DemandScore[] }> {
+  const qs = period ? `?period=${period}` : ""
+  return apiFetch(`/analyst/demand-scores/${qs}`)
+}
+
+export function fetchCompanyDetail(companyId: string): Promise<CompanyDetail> {
+  return apiFetch(`/recruitment/companies/${companyId}/`)
+}
+
+export function fetchTrainingRecommendations(period?: number): Promise<{
+  period_days: number
+  rising_roles: {
+    role_category: string
+    change_percentage: number
+    net_change: number
+    active_jobs_end: number
+  }[]
+  top_technologies: { name: string; count: number }[]
+  recommendations: TrainingRecommendation[]
+}> {
+  const qs = period ? `?period=${period}` : ""
+  return apiFetch(`/training/recommendations/${qs}`)
+}

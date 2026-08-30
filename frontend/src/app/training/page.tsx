@@ -10,6 +10,8 @@ import {
   ArrowUpRight,
   ArrowDownRight,
   BarChart3,
+  Lightbulb,
+  GraduationCap,
 } from "lucide-react"
 import {
   BarChart,
@@ -40,7 +42,13 @@ import {
   SelectValue,
 } from "@/components/ui/select"
 import { AppShell } from "@/components/app-shell"
-import { useProfile, useSkillMatrix, useEmergingSkills } from "@/lib/hooks"
+import { Badge } from "@/components/ui/badge"
+import {
+  useProfile,
+  useSkillMatrix,
+  useEmergingSkills,
+  useTrainingRecommendations,
+} from "@/lib/hooks"
 
 const CHART_COLORS = ["hsl(142,55%,50%)", "hsl(35,85%,55%)", "hsl(220,65%,55%)", "hsl(270,60%,55%)", "hsl(160,50%,45%)"]
 
@@ -58,14 +66,19 @@ export default function TrainingPage() {
   const { data: me, isLoading: profileLoading, error: profileError } = useProfile()
   const { data: matrixData, isLoading: matrixLoading } = useSkillMatrix()
   const { data: emerging, isLoading: emergingLoading } = useEmergingSkills()
+  const { data: recommendationsData, isLoading: recommendationsLoading } =
+    useTrainingRecommendations(30)
   const [selectedRole, setSelectedRole] = useState<string>("all")
 
   useEffect(() => {
     if (profileError) router.push("/login")
   }, [profileError, router])
 
-  const loading = profileLoading || matrixLoading || emergingLoading
+  const loading = profileLoading || matrixLoading || emergingLoading || recommendationsLoading
   const matrix = matrixData?.matrix ?? []
+  const recommendations = recommendationsData?.recommendations ?? []
+  const risingRoles = recommendationsData?.rising_roles ?? []
+  const topTechnologies = recommendationsData?.top_technologies ?? []
 
   if (!me) return null
 
@@ -126,6 +139,82 @@ export default function TrainingPage() {
             </SelectContent>
           </Select>
         </motion.div>
+
+        {(recommendations.length > 0 || risingRoles.length > 0 || topTechnologies.length > 0) && (
+          <motion.div custom={0} variants={fadeUp} initial="hidden" animate="visible">
+            <Card className="border-primary/20 bg-primary/5">
+              <CardHeader className="pb-3">
+                <CardTitle className="flex items-center gap-2 text-base">
+                  <GraduationCap className="size-4 text-primary" />
+                  Training Recommendations
+                </CardTitle>
+              </CardHeader>
+              <CardContent className="space-y-4">
+                {recommendations.length > 0 && (
+                  <div className="space-y-2">
+                    {recommendations.map((rec, i) => (
+                      <div
+                        key={`${rec.type}-${i}`}
+                        className="flex items-start gap-3 rounded-lg border bg-background/80 p-3"
+                      >
+                        <Lightbulb className="mt-0.5 size-4 shrink-0 text-amber-500" />
+                        <div className="min-w-0 flex-1">
+                          <div className="flex flex-wrap items-center gap-2">
+                            <p className="text-sm font-medium">{rec.title}</p>
+                            <Badge
+                              variant="outline"
+                              className={
+                                rec.priority === "high"
+                                  ? "border-transparent bg-red-500/10 text-red-700 dark:text-red-400"
+                                  : "border-transparent bg-amber-500/10 text-amber-700 dark:text-amber-400"
+                              }
+                            >
+                              {rec.priority}
+                            </Badge>
+                          </div>
+                          <p className="mt-1 text-xs text-muted-foreground">{rec.detail}</p>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+
+                <div className="grid gap-4 lg:grid-cols-2">
+                  {risingRoles.length > 0 && (
+                    <div>
+                      <p className="mb-2 text-xs font-medium text-muted-foreground">Rising roles</p>
+                      <div className="flex flex-wrap gap-1.5">
+                        {risingRoles.slice(0, 8).map((r) => (
+                          <Badge
+                            key={r.role_category}
+                            variant="outline"
+                            className="border-transparent bg-emerald-500/10 text-emerald-700 dark:text-emerald-400"
+                          >
+                            {r.role_category}
+                            <span className="ml-1 opacity-70">+{r.change_percentage.toFixed(0)}%</span>
+                          </Badge>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                  {topTechnologies.length > 0 && (
+                    <div>
+                      <p className="mb-2 text-xs font-medium text-muted-foreground">Top technologies</p>
+                      <div className="flex flex-wrap gap-1.5">
+                        {topTechnologies.slice(0, 10).map((t) => (
+                          <Badge key={t.name} variant="secondary">
+                            {t.name}
+                            <span className="ml-1 text-muted-foreground">{t.count}</span>
+                          </Badge>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                </div>
+              </CardContent>
+            </Card>
+          </motion.div>
+        )}
 
         <motion.div custom={0} variants={fadeUp} initial="hidden" animate="visible">
           <div className="grid gap-4 sm:grid-cols-3">

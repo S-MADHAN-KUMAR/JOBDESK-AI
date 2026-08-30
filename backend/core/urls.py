@@ -32,6 +32,12 @@ from .admin_views import (
     emerging_skills,
     recurring_hiring,
     employer_scores_view,
+    dashboard_overview,
+    market_alerts,
+    ceo_daily_brief,
+    demand_scores,
+    company_detail,
+    training_recommendations,
 )
 from .views import (
     AdminUserViewSet,
@@ -100,6 +106,20 @@ urlpatterns = [
     # Recruitment Team - Employer Intelligence
     path('api/recruitment/recurring-hiring/', recurring_hiring, name='recruitment-recurring-hiring'),
     path('api/recruitment/employer-scores/', employer_scores_view, name='recruitment-employer-scores'),
+    path('api/recruitment/companies/<uuid:company_id>/', company_detail, name='recruitment-company-detail'),
+
+    # Shared dashboard / alerts
+    path('api/dashboard/overview/', dashboard_overview, name='dashboard-overview'),
+    path('api/alerts/', market_alerts, name='market-alerts'),
+
+    # CEO daily brief
+    path('api/ceo/daily-brief/', ceo_daily_brief, name='ceo-daily-brief'),
+
+    # Analyst demand scores
+    path('api/analyst/demand-scores/', demand_scores, name='analyst-demand-scores'),
+
+    # Training recommendations
+    path('api/training/recommendations/', training_recommendations, name='training-recommendations'),
 
     # Contact Enrichment (SRS Section 7)
     path('', include('enrichment.urls')),

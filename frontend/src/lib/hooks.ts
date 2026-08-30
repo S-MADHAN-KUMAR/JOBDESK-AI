@@ -28,6 +28,14 @@ import {
   fetchMasterTechnologies,
   fetchMasterSkills,
   fetchEnrichmentCompanies,
+  fetchDashboardOverview,
+  fetchMarketAlerts,
+  fetchCEODailyBrief,
+  fetchDemandScores,
+  fetchCompanyDetail,
+  fetchTrainingRecommendations,
+  fetchJobTraceability,
+  fetchCanonicalJobs,
   apiFetch,
   type User,
   type RawJob,
@@ -309,6 +317,89 @@ export function useEnrichmentCompanies() {
   return useQuery({
     queryKey: ["enrichmentCompanies"],
     queryFn: () => fetchEnrichmentCompanies(),
+    staleTime: 30 * 1000,
+    gcTime: 2 * 60 * 1000,
+  })
+}
+
+export function useDashboardOverview() {
+  return useQuery({
+    queryKey: ["dashboardOverview"],
+    queryFn: fetchDashboardOverview,
+    staleTime: 60 * 1000,
+    gcTime: 5 * 60 * 1000,
+  })
+}
+
+export function useMarketAlerts() {
+  return useQuery({
+    queryKey: ["marketAlerts"],
+    queryFn: fetchMarketAlerts,
+    staleTime: 60 * 1000,
+    gcTime: 5 * 60 * 1000,
+  })
+}
+
+export function useCEODailyBrief() {
+  return useQuery({
+    queryKey: ["ceoDailyBrief"],
+    queryFn: fetchCEODailyBrief,
+    staleTime: 5 * 60 * 1000,
+    gcTime: 10 * 60 * 1000,
+  })
+}
+
+export function useDemandScores(period?: number) {
+  return useQuery({
+    queryKey: ["demandScores", period],
+    queryFn: () => fetchDemandScores(period),
+    staleTime: 5 * 60 * 1000,
+    gcTime: 10 * 60 * 1000,
+  })
+}
+
+export function useCompanyDetail(companyId: string) {
+  return useQuery({
+    queryKey: ["companyDetail", companyId],
+    queryFn: () => fetchCompanyDetail(companyId),
+    enabled: Boolean(companyId),
+    staleTime: 60 * 1000,
+    gcTime: 5 * 60 * 1000,
+  })
+}
+
+export function useTrainingRecommendations(period?: number) {
+  return useQuery({
+    queryKey: ["trainingRecommendations", period],
+    queryFn: () => fetchTrainingRecommendations(period),
+    staleTime: 5 * 60 * 1000,
+    gcTime: 10 * 60 * 1000,
+  })
+}
+
+export function useJobTraceability(jobId: string) {
+  return useQuery({
+    queryKey: ["jobTraceability", jobId],
+    queryFn: () => fetchJobTraceability(jobId),
+    enabled: Boolean(jobId),
+    staleTime: 60 * 1000,
+    gcTime: 5 * 60 * 1000,
+  })
+}
+
+export function useCanonicalJobs(params: {
+  search?: string
+  work_mode?: string
+  seniority?: string
+  status?: string
+  company?: string
+  company_id?: string
+  page?: number
+  page_size?: number
+} = {}) {
+  return useQuery({
+    queryKey: ["canonicalJobs", params],
+    queryFn: () => fetchCanonicalJobs(params),
     staleTime: 30 * 1000,
     gcTime: 2 * 60 * 1000,
   })

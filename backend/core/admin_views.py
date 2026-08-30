@@ -8,6 +8,7 @@ from django.utils import timezone as dj_timezone
 from rest_framework import status, viewsets
 from rest_framework.decorators import action, api_view, permission_classes
 from rest_framework.pagination import PageNumberPagination
+from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 
 from django.core.exceptions import ValidationError
@@ -1147,4 +1148,413 @@ def employer_scores_view(request):
             }
             for s in scores
         ],
+    })
+
+# ---------------------------------------------------------------------------
+# Dashboard, Alerts, Company Detail, Demand Scores, Training Recommendations
+# ---------------------------------------------------------------------------
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def dashboard_overview(request):
+    """Market dashboard KPIs available to every authenticated role."""
+    total_jobs = CanonicalJob.objects.count()
+    active_jobs = CanonicalJob.objects.filter(status='active').count()
+    expired_jobs = CanonicalJob.objects.filter(status='expired').count()
+    companies = (
+        CanonicalJob.objects.exclude(company_name_raw='')
+        .values('company_name_raw')
+        .distinct()
+        .count()
+    )
+    classified = JobClassification.objects.count()
+    avg_confidence = (
+        JobClassification.objects.aggregate(avg=Avg('confidence_score'))['avg'] or 0.0
+    )
+
+    exp_bands = list(
+        CanonicalJob.objects.values('seniority')
+        .annotate(count=Count('id'))
+        .order_by('-count')[:8]
+    )
+    skill_counts = {}
+    for row in JobClassification.objects.exclude(skills=[]).values_list('skills', flat=True)[:500]:
+        if isinstance(row, list):
+            for s in row:
+                key = str(s).strip() if s else ''
+                if key:
+                    skill_counts[key] = skill_counts.get(key, 0) + 1
+    top_skills_out = [
+        {'name': k, 'count': v}
+        for k, v in sorted(skill_counts.items(), key=lambda x: -x[1])[:10]
+    ]
+
+    source_mix = list(
+        JobSourceRecord.objects.values('provider_code')
+        .annotate(count=Count('id'))
+        .order_by('-count')[:10]
+    )
+
+    movements = list(
+        JobDemandMovement.objects.filter(period_days=30)
+        .order_by('-change_percentage')[:5]
+        .values(
+            'role_category', 'net_change', 'change_percentage',
+            'active_jobs_end', 'new_postings',
+        )
+    )
+
+    recent_runs = list(
+        IngestionRun.objects.select_related('provider')
+        .order_by('-started_at')[:5]
+        .values(
+            'id', 'status', 'fetched_count', 'error_count',
+            'started_at', 'ended_at', 'provider__provider_code',
+        )
+    )
+    for r in recent_runs:
+        r['id'] = str(r['id'])
+        r['provider'] = r.pop('provider__provider_code', None) or 'unknown'
+        if r.get('started_at'):
+            r['started_at'] = r['started_at'].isoformat()
+        if r.get('ended_at'):
+            r['ended_at'] = r['ended_at'].isoformat()
+
+    return Response({
+        'total_jobs': total_jobs,
+        'active_jobs': active_jobs,
+        'expired_jobs': expired_jobs,
+        'unique_companies': companies,
+        'classified_jobs': classified,
+        'avg_confidence': round(float(avg_confidence), 3),
+        'experience_bands': [
+            {'seniority': e['seniority'] or 'unknown', 'count': e['count']}
+            for e in exp_bands
+        ],
+        'top_skills': top_skills_out,
+        'source_mix': [
+            {'provider': s['provider_code'] or 'unknown', 'count': s['count']}
+            for s in source_mix
+        ],
+        'top_demand_movers': movements,
+        'recent_runs': recent_runs,
+    })
+
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def market_alerts(request):
+    """Derived market/system alerts (no persistent Alert model required)."""
+    alerts = []
+    now = dj_timezone.now().isoformat()
+
+    for m in JobDemandMovement.objects.filter(period_days=30).order_by('-change_percentage')[:20]:
+        pct = m.change_percentage or 0
+        if pct >= 25:
+            alerts.append({
+                'id': f'spike-{m.id}',
+                'severity': 'high',
+                'category': 'demand_spike',
+                'title': f'Demand spike: {m.role_category}',
+                'message': (
+                    f'{m.role_category} rose {pct:.1f}% ({m.net_change:+d} net) '
+                    f'over {m.period_days} days.'
+                ),
+                'role_category': m.role_category,
+                'metric': pct,
+                'created_at': now,
+            })
+        elif pct <= -25:
+            alerts.append({
+                'id': f'decline-{m.id}',
+                'severity': 'medium',
+                'category': 'demand_decline',
+                'title': f'Demand decline: {m.role_category}',
+                'message': (
+                    f'{m.role_category} fell {pct:.1f}% ({m.net_change:+d} net) '
+                    f'over {m.period_days} days.'
+                ),
+                'role_category': m.role_category,
+                'metric': pct,
+                'created_at': now,
+            })
+
+    for s in EmployerHiringScore.objects.select_related('company').filter(hiring_score__gte=70)[:10]:
+        name = s.company.name if s.company else 'Unknown'
+        alerts.append({
+            'id': f'employer-{s.id}',
+            'severity': 'medium',
+            'category': 'recurring_employer',
+            'title': f'High-opportunity employer: {name}',
+            'message': (
+                f'{name} scored {s.hiring_score:.0f} with {s.active_postings} '
+                f'active postings across {s.unique_roles} roles.'
+            ),
+            'company_id': str(s.company_id) if s.company_id else '',
+            'company_name': name,
+            'metric': s.hiring_score,
+            'created_at': now,
+        })
+
+    failed_runs = (
+        IngestionRun.objects.filter(status__in=['failed', 'partial'])
+        .select_related('provider')
+        .order_by('-started_at')[:5]
+    )
+    for run in failed_runs:
+        provider = run.provider.provider_code if run.provider_id else 'unknown'
+        alerts.append({
+            'id': f'run-{run.id}',
+            'severity': 'high' if run.status == 'failed' else 'medium',
+            'category': 'source_failure',
+            'title': f'Source issue: {provider}',
+            'message': (
+                f'Ingestion run {run.status} with {run.error_count} errors / '
+                f'{run.fetched_count} fetched.'
+            ),
+            'provider': provider,
+            'metric': run.error_count,
+            'created_at': run.started_at.isoformat() if run.started_at else now,
+        })
+
+    low_conf = JobClassification.objects.filter(confidence_score__lt=0.5).count()
+    if low_conf:
+        alerts.append({
+            'id': 'quality-low-confidence',
+            'severity': 'low',
+            'category': 'data_quality',
+            'title': 'Low-confidence classifications',
+            'message': f'{low_conf} jobs have classification confidence below 50%.',
+            'metric': low_conf,
+            'created_at': now,
+        })
+
+    severity_rank = {'high': 0, 'medium': 1, 'low': 2}
+    alerts.sort(key=lambda a: (severity_rank.get(a['severity'], 9), a['title']))
+    return Response({'count': len(alerts), 'alerts': alerts[:50]})
+
+
+@api_view(['GET'])
+@permission_classes([IsCEOOrManagement])
+def ceo_daily_brief(request):
+    """Structured daily CEO intelligence brief from live aggregates."""
+    total = CanonicalJob.objects.count()
+    active = CanonicalJob.objects.filter(status='active').count()
+    movers = list(
+        JobDemandMovement.objects.filter(period_days=30)
+        .order_by('-change_percentage')[:5]
+        .values('role_category', 'net_change', 'change_percentage', 'new_postings')
+    )
+    decliners = list(
+        JobDemandMovement.objects.filter(period_days=30)
+        .order_by('change_percentage')[:5]
+        .values('role_category', 'net_change', 'change_percentage', 'expired_postings')
+    )
+    employers = list(
+        EmployerHiringScore.objects.select_related('company').order_by('-hiring_score')[:5]
+    )
+    skills = []
+    for row in JobClassification.objects.exclude(primary_technologies=[]).values_list(
+        'primary_technologies', flat=True
+    )[:300]:
+        if isinstance(row, list):
+            skills.extend(row)
+    skill_counts = {}
+    for s in skills:
+        key = str(s).strip()
+        if key:
+            skill_counts[key] = skill_counts.get(key, 0) + 1
+    top_tech = [
+        {'name': k, 'count': v}
+        for k, v in sorted(skill_counts.items(), key=lambda x: -x[1])[:8]
+    ]
+
+    headline_parts = [f'{active} active of {total} canonical jobs tracked.']
+    if movers:
+        top = movers[0]
+        headline_parts.append(
+            f"Fastest riser: {top['role_category']} ({top['change_percentage']:+.1f}%)."
+        )
+    if employers:
+        e = employers[0]
+        headline_parts.append(
+            f"Top employer opportunity: "
+            f"{e.company.name if e.company else 'Unknown'} (score {e.hiring_score:.0f})."
+        )
+
+    return Response({
+        'generated_at': dj_timezone.now().isoformat(),
+        'headline': ' '.join(headline_parts),
+        'active_jobs': active,
+        'total_jobs': total,
+        'rising_roles': movers,
+        'declining_roles': decliners,
+        'priority_employers': [
+            {
+                'company_id': str(e.company_id) if e.company_id else '',
+                'company_name': e.company.name if e.company else '',
+                'hiring_score': e.hiring_score,
+                'active_postings': e.active_postings,
+                'unique_roles': e.unique_roles,
+            }
+            for e in employers
+        ],
+        'recommended_technologies': top_tech,
+        'training_actions': [
+            f"Prioritize curriculum around {t['name']} ({t['count']} mentions)."
+            for t in top_tech[:3]
+        ],
+    })
+
+
+@api_view(['GET'])
+@permission_classes([IsMarketAnalyst])
+def demand_scores(request):
+    """Configurable 0-100 demand score by role from latest movement windows."""
+    period = int(request.query_params.get('period', 30))
+    movements = (
+        JobDemandMovement.objects.filter(period_days=period)
+        .order_by('role_category', '-period_start')
+    )
+    latest = {}
+    for m in movements:
+        if m.role_category not in latest:
+            latest[m.role_category] = m
+
+    scores = []
+    for role, m in latest.items():
+        volume = min(40.0, (m.active_jobs_end or 0) * 2.0)
+        growth = max(-30.0, min(40.0, (m.change_percentage or 0) * 0.8))
+        velocity = min(20.0, (m.new_postings or 0) * 1.5)
+        score = max(0.0, min(100.0, 30.0 + volume + growth + velocity))
+        scores.append({
+            'role_category': role,
+            'period_days': period,
+            'demand_score': round(score, 1),
+            'active_jobs': m.active_jobs_end,
+            'net_change': m.net_change,
+            'change_percentage': m.change_percentage,
+            'new_postings': m.new_postings,
+            'band': (
+                'hot' if score >= 75 else
+                'warm' if score >= 50 else
+                'cool' if score >= 25 else
+                'cold'
+            ),
+        })
+    scores.sort(key=lambda x: -x['demand_score'])
+    return Response({'period_days': period, 'scores': scores})
+
+
+@api_view(['GET'])
+@permission_classes([IsRecruitmentTeam])
+def company_detail(request, company_id):
+    """Company intelligence detail: profile, score, and recent jobs."""
+    from django.shortcuts import get_object_or_404
+
+    company = get_object_or_404(MasterCompany, pk=company_id)
+    jobs_qs = CanonicalJob.objects.filter(company=company).order_by('-last_seen')
+    active = jobs_qs.filter(status='active').count()
+    total = jobs_qs.count()
+    score = (
+        EmployerHiringScore.objects.filter(company=company)
+        .order_by('-hiring_score')
+        .first()
+    )
+    roles = list(
+        JobClassification.objects.filter(canonical_job__company=company)
+        .values('role_category')
+        .annotate(count=Count('id'))
+        .order_by('-count')[:10]
+    )
+    recent_jobs = [
+        {
+            'id': str(j.id),
+            'title': j.title,
+            'location_raw': j.location_raw,
+            'status': j.status,
+            'seniority': j.seniority,
+            'work_mode': j.work_mode,
+            'last_seen': j.last_seen.isoformat() if j.last_seen else None,
+        }
+        for j in jobs_qs[:25]
+    ]
+    return Response({
+        'company': {
+            'id': str(company.id),
+            'name': company.name,
+            'normalized_name': company.normalized_name,
+            'domain': company.domain or '',
+            'location': company.location or '',
+            'website': company.website or '',
+        },
+        'stats': {
+            'total_jobs': total,
+            'active_jobs': active,
+            'unique_roles': len(roles),
+        },
+        'hiring_score': {
+            'hiring_score': score.hiring_score if score else 0,
+            'total_postings': score.total_postings if score else total,
+            'active_postings': score.active_postings if score else active,
+            'unique_roles': score.unique_roles if score else len(roles),
+            'period_start': str(score.period_start) if score else None,
+            'period_end': str(score.period_end) if score else None,
+        },
+        'role_breakdown': roles,
+        'recent_jobs': recent_jobs,
+    })
+
+
+@api_view(['GET'])
+@permission_classes([IsTrainingManager])
+def training_recommendations(request):
+    """Curriculum / procurement recommendations from skill & demand signals."""
+    period = int(request.query_params.get('period', 30))
+    movers = list(
+        JobDemandMovement.objects.filter(period_days=period, change_percentage__gte=10)
+        .order_by('-change_percentage')[:10]
+        .values('role_category', 'change_percentage', 'net_change', 'active_jobs_end')
+    )
+
+    tech_counts = {}
+    for row in JobClassification.objects.exclude(primary_technologies=[]).values_list(
+        'primary_technologies', flat=True
+    )[:500]:
+        if isinstance(row, list):
+            for t in row:
+                key = str(t).strip()
+                if key:
+                    tech_counts[key] = tech_counts.get(key, 0) + 1
+    top_tech = [
+        {'name': k, 'count': v}
+        for k, v in sorted(tech_counts.items(), key=lambda x: -x[1])[:15]
+    ]
+
+    recommendations = []
+    for m in movers[:5]:
+        recommendations.append({
+            'type': 'role_curriculum',
+            'priority': 'high' if m['change_percentage'] >= 25 else 'medium',
+            'title': f"Expand training for {m['role_category']}",
+            'detail': (
+                f"Demand up {m['change_percentage']:.1f}% ({m['net_change']:+d} net). "
+                f"{m['active_jobs_end']} active openings in the latest window."
+            ),
+            'role_category': m['role_category'],
+        })
+    for t in top_tech[:5]:
+        recommendations.append({
+            'type': 'technology_focus',
+            'priority': 'medium',
+            'title': f"Skill focus: {t['name']}",
+            'detail': f"Appears in {t['count']} classified jobs. Consider modules and assessments.",
+            'technology': t['name'],
+        })
+
+    return Response({
+        'period_days': period,
+        'rising_roles': movers,
+        'top_technologies': top_tech,
+        'recommendations': recommendations,
     })

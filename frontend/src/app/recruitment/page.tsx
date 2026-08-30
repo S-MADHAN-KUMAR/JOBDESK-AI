@@ -1,6 +1,7 @@
 "use client"
 
 import { useEffect, useState } from "react"
+import Link from "next/link"
 import { useRouter } from "next/navigation"
 import { motion } from "framer-motion"
 import {
@@ -10,6 +11,7 @@ import {
   Users,
   BarChart3,
   Target,
+  ExternalLink,
 } from "lucide-react"
 import {
   BarChart,
@@ -324,7 +326,19 @@ export default function RecruitmentPage() {
                     <TableBody>
                       {scores.map((s) => (
                         <TableRow key={s.id}>
-                          <TableCell className="font-medium">{s.company_name}</TableCell>
+                          <TableCell className="font-medium">
+                            {s.company_id ? (
+                              <Link
+                                href={`/companies/${s.company_id}`}
+                                className="inline-flex items-center gap-1 text-primary hover:underline"
+                              >
+                                {s.company_name}
+                                <ExternalLink className="size-3 opacity-70" />
+                              </Link>
+                            ) : (
+                              s.company_name
+                            )}
+                          </TableCell>
                           <TableCell className="text-right">
                             <span className={`inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium ${
                               s.hiring_score >= 70 ? 'bg-emerald-500/10 text-emerald-700 dark:text-emerald-400' :
