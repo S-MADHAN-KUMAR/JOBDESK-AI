@@ -46,6 +46,11 @@ class JobSource(models.Model):
     rate_limit_rpm = models.PositiveIntegerField(default=60)
     rate_limit_daily = models.PositiveIntegerField(default=1000)
     current_daily_uses = models.PositiveIntegerField(default=0)
+    daily_uses_on = models.DateField(
+        null=True,
+        blank=True,
+        help_text='Local calendar date that current_daily_uses applies to.',
+    )
     credit_usage = models.JSONField(
         default=dict,
         blank=True,

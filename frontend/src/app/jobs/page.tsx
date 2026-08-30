@@ -6,16 +6,15 @@ import {
   BriefcaseBusiness,
   Building2,
   Calendar,
-  CheckCircle2,
   ChevronLeft,
   ChevronRight,
   ExternalLink,
   Loader2,
+  MapPin,
   Search,
   Sparkles,
   Trash2,
   X,
-  XCircle,
 } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import {
@@ -59,20 +58,7 @@ import { useProfile, useRawJobs, useJobProviders } from "@/lib/hooks"
 import {
   type RawJob,
   deleteRawJobs,
-  runCompanyEnrichment,
 } from "@/lib/api"
-
-type EnrichTarget = {
-  company: string
-  location: string
-  titles: string[]
-}
-
-type EnrichState = {
-  company: string
-  status: "pending" | "running" | "done" | "failed"
-  message: string
-}
 
 type JobDetailView = {
   title: string
@@ -266,6 +252,57 @@ function DetailFact({ label, value }: { label: string; value: string }) {
   )
 }
 
+function formatProviderLabel(code: string): string {
+  const known: Record<string, string> = {
+    serpapi: "SerpApi",
+    apify: "Apify",
+  }
+  const key = code.trim().toLowerCase()
+  if (known[key]) return known[key]
+  if (!code) return "Unknown"
+  return code.charAt(0).toUpperCase() + code.slice(1).toLowerCase()
+}
+
+function formatRelativeTime(iso: string): string {
+  const date = new Date(iso)
+  if (Number.isNaN(date.getTime())) return "—"
+  const diffMs = Date.now() - date.getTime()
+  const mins = Math.floor(diffMs / 60_000)
+  if (mins < 1) return "Just now"
+  if (mins < 60) return `${mins}m ago`
+  const hours = Math.floor(mins / 60)
+  if (hours < 24) return `${hours}h ago`
+  const days = Math.floor(hours / 24)
+  if (days < 7) return `${days}d ago`
+  return date.toLocaleDateString(undefined, {
+    day: "numeric",
+    month: "short",
+    year: "numeric",
+  })
+}
+
+function formatAbsoluteTime(iso: string): string {
+  const date = new Date(iso)
+  if (Number.isNaN(date.getTime())) return ""
+  return date.toLocaleString(undefined, {
+    day: "numeric",
+    month: "short",
+    year: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+  })
+}
+
+function platformLabel(job: RawJob): string {
+  const p = job.raw_payload || {}
+  return (
+    asString(p.via) ||
+    asString(p.platform) ||
+    asString(p.source) ||
+    ""
+  )
+}
+
 export default function JobExplorerPage() {
   const router = useRouter()
   const { data: me, isLoading: profileLoading, error: profileError } = useProfile()
@@ -296,9 +333,6 @@ export default function JobExplorerPage() {
   const [selectionMode, setSelectionMode] = useState(false)
   const [deleteOpen, setDeleteOpen] = useState(false)
   const [deleting, setDeleting] = useState(false)
-  const [enrichOpen, setEnrichOpen] = useState(false)
-  const [enriching, setEnriching] = useState(false)
-  const [enrichState, setEnrichState] = useState<EnrichState[]>([])
 
   const detailView = useMemo(
     () => (detail ? buildJobDetail(detail) : null),
@@ -312,29 +346,6 @@ export default function JobExplorerPage() {
   useEffect(() => {
     setShowRaw(false)
   }, [detail?.id])
-
-  const enrichTargets = useMemo(() => {
-    const byCompany = new Map<string, { location: string; titles: Set<string> }>()
-    for (const job of jobs) {
-      if (!selected.has(job.id) || !job.company) continue
-      const entry = byCompany.get(job.company) ?? {
-        location: "",
-        titles: new Set<string>(),
-      }
-      if (!entry.location && job.location) entry.location = job.location
-      if (job.title) entry.titles.add(job.title)
-      byCompany.set(job.company, entry)
-    }
-    const targets: EnrichTarget[] = []
-    for (const [company, entry] of byCompany) {
-      targets.push({
-        company,
-        location: entry.location,
-        titles: [...entry.titles],
-      })
-    }
-    return targets
-  }, [jobs, selected])
 
   function applyFilters(p = 1) {
     setPage(p)
@@ -373,57 +384,6 @@ export default function JobExplorerPage() {
     }
   }
 
-  async function handleEnrich() {
-    setEnrichOpen(true)
-    setEnriching(true)
-    setEnrichState(
-      enrichTargets.map((target) => ({
-        company: target.company,
-        status: "pending",
-        message: "",
-      })),
-    )
-    for (let i = 0; i < enrichTargets.length; i++) {
-      const target = enrichTargets[i]
-      setEnrichState((prev) =>
-        prev.map((item, idx) =>
-          idx === i ? { ...item, status: "running", message: "" } : item,
-        ),
-      )
-      try {
-        const res = await runCompanyEnrichment({
-          company_name: target.company,
-          titles: target.titles.length > 0 ? target.titles.slice(0, 10) : undefined,
-          location: target.location || undefined,
-        })
-        setEnrichState((prev) =>
-          prev.map((item, idx) =>
-            idx === i
-              ? {
-                  ...item,
-                  status: res.success ? "done" : "failed",
-                  message: res.message,
-                }
-              : item,
-          ),
-        )
-      } catch (err) {
-        setEnrichState((prev) =>
-          prev.map((item, idx) =>
-            idx === i
-              ? {
-                  ...item,
-                  status: "failed",
-                  message: err instanceof Error ? err.message : "Enrichment failed",
-                }
-              : item,
-          ),
-        )
-      }
-    }
-    setEnriching(false)
-  }
-
   if (!me) return null
 
   const allSelected = jobs.length > 0 && selected.size === jobs.length
@@ -459,7 +419,7 @@ export default function JobExplorerPage() {
               />
             </div>
             <div className="flex flex-col gap-2">
-              <Label htmlFor="job-provider">Provider</Label>
+              <Label htmlFor="job-provider">Source</Label>
               <Select
                 value={provider}
                 onValueChange={(value) => {
@@ -472,10 +432,10 @@ export default function JobExplorerPage() {
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="all">All providers</SelectItem>
+                  <SelectItem value="all">All sources</SelectItem>
                   {providers.map((code) => (
                     <SelectItem key={code} value={code}>
-                      {code}
+                      {formatProviderLabel(code)}
                     </SelectItem>
                   ))}
                 </SelectContent>
@@ -493,167 +453,216 @@ export default function JobExplorerPage() {
         </Card>
 
         <Card>
-          <CardHeader className="flex-row items-center justify-between gap-3 space-y-0">
-            <CardTitle>Job records</CardTitle>
-            <div className="flex flex-wrap items-center justify-end gap-2">
-              {selectionMode && selected.size > 0 && (
-                <Button
-                  variant="secondary"
-                  size="sm"
-                  onClick={() => void handleEnrich()}
-                  disabled={enriching || enrichTargets.length === 0}
-                  data-icon="inline-start"
-                >
-                  <Sparkles data-icon="inline-start" />
-                  Enrich ({enrichTargets.length})
-                </Button>
-              )}
-              {selectionMode && selected.size > 0 && (
-                <Button
-                  variant="destructive"
-                  size="sm"
-                  onClick={() => setDeleteOpen(true)}
-                  data-icon="inline-start"
-                >
-                  <Trash2 data-icon="inline-start" />
-                  Delete ({selected.size})
-                </Button>
-              )}
-              {selectionMode && (
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  onClick={() => {
-                    setSelectionMode(false)
-                    setSelected(new Set())
-                  }}
-                >
-                  Cancel
-                </Button>
-              )}
-              {!selectionMode && (
-                <Button
-                  variant="destructive-soft"
-                  size="sm"
-                  onClick={() => setSelectionMode(true)}
-                  data-icon="inline-start"
-                >
-                  <Trash2 data-icon="inline-start" />
-                  Delete
-                </Button>
-              )}
-              <span className="text-sm text-muted-foreground">{total} found</span>
+          <CardHeader className="gap-3 space-y-0">
+            <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+              <div>
+                <CardTitle>Job records</CardTitle>
+                <CardDescription className="mt-1">
+                  {selectionMode
+                    ? "Select jobs to delete, then confirm."
+                    : "Click a row to open full job details."}
+                </CardDescription>
+              </div>
+              <div className="flex flex-wrap items-center gap-2">
+                {selectionMode && selected.size > 0 && (
+                  <Button
+                    variant="destructive"
+                    size="sm"
+                    onClick={() => setDeleteOpen(true)}
+                    data-icon="inline-start"
+                  >
+                    <Trash2 data-icon="inline-start" />
+                    Delete ({selected.size})
+                  </Button>
+                )}
+                {selectionMode && (
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => {
+                      setSelectionMode(false)
+                      setSelected(new Set())
+                    }}
+                  >
+                    Cancel
+                  </Button>
+                )}
+                {!selectionMode && (
+                  <Button
+                    variant="destructive-soft"
+                    size="sm"
+                    onClick={() => setSelectionMode(true)}
+                    data-icon="inline-start"
+                  >
+                    <Trash2 data-icon="inline-start" />
+                    Delete
+                  </Button>
+                )}
+                <Badge variant="secondary" className="tabular-nums">
+                  {total.toLocaleString()} found
+                </Badge>
+              </div>
             </div>
+            {selectionMode && (
+              <div className="rounded-lg border border-destructive/20 bg-destructive/5 px-3 py-2 text-sm text-destructive">
+                Selection mode — tick the jobs you want to remove
+                {selected.size > 0 ? ` (${selected.size} selected)` : ""}.
+              </div>
+            )}
           </CardHeader>
           <CardContent className="p-0">
             {jobsLoading ? (
-              <div className="flex items-center justify-center gap-2 py-12 text-muted-foreground">
+              <div className="flex items-center justify-center gap-2 py-16 text-muted-foreground">
                 <Loader2 className="size-5 animate-spin" />
-                <span className="text-sm">Fetching records...</span>
+                <span className="text-sm">Fetching job records…</span>
               </div>
             ) : jobs.length === 0 ? (
               <EmptyState
                 icon={BriefcaseBusiness}
                 title="No job records found"
-                description="Run an ingestion from Source Management to populate records."
+                description="Try a different search, or run an ingestion from Source Management."
               />
             ) : (
-              <Table>
-                <TableHeader>
-                  <TableRow>
-                    {selectionMode && (
-                      <TableHead className="w-10">
-                        <input
-                          type="checkbox"
-                          aria-label="Select all jobs"
-                          checked={allSelected}
-                          onChange={toggleAll}
-                          className="size-4 accent-primary"
-                        />
-                      </TableHead>
-                    )}
-                    <TableHead>Title</TableHead>
-                    <TableHead>Company</TableHead>
-                    <TableHead>Location</TableHead>
-                    <TableHead>Provider</TableHead>
-                    <TableHead>Fetched</TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {jobs.map((job) => (
-                    <TableRow
-                      key={job.id}
-                      className={cn(
-                        "cursor-pointer",
-                        detail?.id === job.id && "bg-muted",
-                      )}
-                      onClick={() => setDetail(job)}
-                    >
+              <div className="overflow-x-auto">
+                <Table>
+                  <TableHeader>
+                    <TableRow className="hover:bg-transparent">
                       {selectionMode && (
-                        <TableCell onClick={(e) => e.stopPropagation()}>
+                        <TableHead className="w-12 sticky left-0 z-10 bg-background">
                           <input
                             type="checkbox"
-                            aria-label={`Select ${job.title || "job"}`}
-                            checked={selected.has(job.id)}
-                            onChange={() => toggleJob(job.id)}
+                            aria-label="Select all jobs on this page"
+                            checked={allSelected}
+                            onChange={toggleAll}
                             className="size-4 accent-primary"
                           />
-                        </TableCell>
+                        </TableHead>
                       )}
-                      <TableCell className="max-w-64">
-                        <span className="block truncate font-medium">
-                          {job.title || "—"}
-                        </span>
-                      </TableCell>
-                      <TableCell className="max-w-40">
-                        <span className="block truncate">{job.company || "—"}</span>
-                      </TableCell>
-                      <TableCell className="max-w-40">
-                        <span className="block truncate">{job.location || "—"}</span>
-                      </TableCell>
-                      <TableCell>
-                        <Badge variant="secondary" className="font-mono text-[10px]">
-                          {job.provider_code}
-                        </Badge>
-                      </TableCell>
-                      <TableCell className="text-xs text-muted-foreground">
-                        {new Date(job.fetched_at).toLocaleString()}
-                      </TableCell>
+                      <TableHead className="min-w-[16rem]">Job</TableHead>
+                      <TableHead className="min-w-[10rem]">Company</TableHead>
+                      <TableHead className="min-w-[9rem]">Location</TableHead>
+                      <TableHead className="min-w-[7rem]">Source</TableHead>
+                      <TableHead className="min-w-[7rem]">Fetched</TableHead>
                     </TableRow>
-                  ))}
-                </TableBody>
-              </Table>
+                  </TableHeader>
+                  <TableBody>
+                    {jobs.map((job) => {
+                      const title = job.title || "Untitled job"
+                      const company = job.company || "Unknown company"
+                      const location = formatLocation(job) || "—"
+                      const board = platformLabel(job)
+                      const isActive = detail?.id === job.id
+                      const isChecked = selected.has(job.id)
+                      return (
+                        <TableRow
+                          key={job.id}
+                          className={cn(
+                            "cursor-pointer transition-colors",
+                            isActive && "bg-muted",
+                            isChecked && "bg-destructive/5",
+                          )}
+                          onClick={() => setDetail(job)}
+                        >
+                          {selectionMode && (
+                            <TableCell
+                              className="sticky left-0 z-10 bg-background"
+                              onClick={(e) => e.stopPropagation()}
+                            >
+                              <input
+                                type="checkbox"
+                                aria-label={`Select ${title}`}
+                                checked={isChecked}
+                                onChange={() => toggleJob(job.id)}
+                                className="size-4 accent-primary"
+                              />
+                            </TableCell>
+                          )}
+                          <TableCell className="align-top">
+                            <div className="max-w-md">
+                              <p
+                                className="line-clamp-2 text-sm font-semibold leading-snug text-foreground"
+                                title={title}
+                              >
+                                {title}
+                              </p>
+                              {board ? (
+                                <p className="mt-1 text-xs text-muted-foreground">
+                                  via {board}
+                                </p>
+                              ) : null}
+                            </div>
+                          </TableCell>
+                          <TableCell className="align-top">
+                            <div className="flex max-w-[14rem] items-start gap-1.5">
+                              <Building2 className="mt-0.5 size-3.5 shrink-0 text-muted-foreground" />
+                              <span className="line-clamp-2 text-sm" title={company}>
+                                {company}
+                              </span>
+                            </div>
+                          </TableCell>
+                          <TableCell className="align-top">
+                            <div className="flex max-w-[12rem] items-start gap-1.5">
+                              <MapPin className="mt-0.5 size-3.5 shrink-0 text-muted-foreground" />
+                              <span className="line-clamp-2 text-sm" title={location}>
+                                {location}
+                              </span>
+                            </div>
+                          </TableCell>
+                          <TableCell className="align-top">
+                            <Badge variant="secondary">
+                              {formatProviderLabel(job.provider_code)}
+                            </Badge>
+                          </TableCell>
+                          <TableCell className="align-top">
+                            <span
+                              className="whitespace-nowrap text-sm text-muted-foreground"
+                              title={formatAbsoluteTime(job.fetched_at)}
+                            >
+                              {formatRelativeTime(job.fetched_at)}
+                            </span>
+                          </TableCell>
+                        </TableRow>
+                      )
+                    })}
+                  </TableBody>
+                </Table>
+              </div>
             )}
           </CardContent>
-          {(hasPrev || hasNext) && (
-            <CardContent className="flex items-center justify-between border-t px-4 py-3">
-              <Button
-                variant="outline"
-                size="sm"
-                disabled={!hasPrev || jobsLoading}
-                onClick={() => {
-                  setSelected(new Set())
-                  setPage(page - 1)
-                }}
-                data-icon="inline-start"
-              >
-                <ChevronLeft data-icon="inline-start" />
-                Previous
-              </Button>
-              <span className="text-sm text-muted-foreground">Page {page}</span>
-              <Button
-                variant="outline"
-                size="sm"
-                disabled={!hasNext || jobsLoading}
-                onClick={() => {
-                  setSelected(new Set())
-                  setPage(page + 1)
-                }}
-                data-icon="inline-end"
-              >
-                Next
-                <ChevronRight data-icon="inline-end" />
-              </Button>
+          {(hasPrev || hasNext || total > 0) && (
+            <CardContent className="flex flex-col gap-3 border-t px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
+              <p className="text-sm text-muted-foreground">
+                Page {page}
+                {total > 0 ? ` · ${total.toLocaleString()} total` : ""}
+              </p>
+              <div className="flex items-center gap-2">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  disabled={!hasPrev || jobsLoading}
+                  onClick={() => {
+                    setSelected(new Set())
+                    setPage(page - 1)
+                  }}
+                  data-icon="inline-start"
+                >
+                  <ChevronLeft data-icon="inline-start" />
+                  Previous
+                </Button>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  disabled={!hasNext || jobsLoading}
+                  onClick={() => {
+                    setSelected(new Set())
+                    setPage(page + 1)
+                  }}
+                  data-icon="inline-end"
+                >
+                  Next
+                  <ChevronRight data-icon="inline-end" />
+                </Button>
+              </div>
             </CardContent>
           )}
         </Card>
@@ -876,59 +885,6 @@ export default function JobExplorerPage() {
                 <Trash2 data-icon="inline-start" />
               )}
               Delete
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
-
-      <Dialog open={enrichOpen} onOpenChange={setEnrichOpen}>
-        <DialogContent className="sm:max-w-lg">
-          <DialogHeader>
-            <DialogTitle>Enrich selected companies</DialogTitle>
-            <DialogDescription>
-              Running the provider waterfall for each target company. Results are
-              stored in the Enrichment workspace.
-            </DialogDescription>
-          </DialogHeader>
-          <div className="flex max-h-80 flex-col gap-2 overflow-y-auto">
-            {enrichState.length === 0 ? (
-              <p className="text-sm text-muted-foreground">
-                No target companies found in the selection.
-              </p>
-            ) : (
-              enrichState.map((item) => (
-                <div
-                  key={item.company}
-                  className="flex items-start gap-2 rounded-lg border bg-muted/30 px-3 py-2"
-                >
-                  <span className="mt-0.5 shrink-0">
-                    {item.status === "done" ? (
-                      <CheckCircle2 className="size-4 text-emerald-600" />
-                    ) : item.status === "failed" ? (
-                      <XCircle className="size-4 text-destructive" />
-                    ) : item.status === "running" ? (
-                      <Loader2 className="size-4 animate-spin text-muted-foreground" />
-                    ) : (
-                      <span className="block size-4 rounded-full border border-muted-foreground/40" />
-                    )}
-                  </span>
-                  <div className="min-w-0">
-                    <p className="truncate text-sm font-medium">{item.company}</p>
-                    <p className="truncate text-xs text-muted-foreground">
-                      {item.status === "pending"
-                        ? "Queued"
-                        : item.status === "running"
-                          ? "Running waterfall..."
-                          : item.message || (item.status === "done" ? "Complete" : "")}
-                    </p>
-                  </div>
-                </div>
-              ))
-            )}
-          </div>
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setEnrichOpen(false)}>
-              {enriching ? "Enriching..." : "Close"}
             </Button>
           </DialogFooter>
         </DialogContent>

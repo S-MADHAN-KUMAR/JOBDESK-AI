@@ -1,5 +1,7 @@
 from rest_framework import serializers
 
+from core.services.daily_usage import ensure_daily_usage_counter
+
 from .models import Company, Contact, EnrichmentRun, EnrichmentSource
 
 
@@ -22,6 +24,10 @@ class EnrichmentSourceSerializer(serializers.ModelSerializer):
 
     def get_auth_configured(self, obj):
         return obj.has_auth_config()
+
+    def to_representation(self, instance):
+        ensure_daily_usage_counter(instance)
+        return super().to_representation(instance)
 
     def create(self, validated_data):
         auth_config = validated_data.pop('auth_config', None)

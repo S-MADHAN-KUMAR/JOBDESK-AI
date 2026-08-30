@@ -185,6 +185,8 @@ class JobSourceViewSet(viewsets.ModelViewSet):
             provider = get_provider(source)
             healthy = provider.health_check()
             credits = provider.persist_credit_usage()
+            from core.services.daily_usage import ensure_daily_usage_counter
+            ensure_daily_usage_counter(source)
             headroom = max(0, source.rate_limit_daily - source.current_daily_uses)
         except ProviderError as exc:
             source.health_status = JobSource.HealthStatus.FAILED
@@ -302,6 +304,7 @@ class JobSourceViewSet(viewsets.ModelViewSet):
         run = IngestionRun.objects.create(
             provider=source,
             status=IngestionRun.Status.RUNNING,
+            celery_task_id='',
             started_at=now,
         )
 
@@ -358,10 +361,13 @@ class JobSourceViewSet(viewsets.ModelViewSet):
             run.ended_at = datetime.now(timezone.utc)
             run.save()
 
-            JobSource.objects.filter(pk=source.pk).update(
-                current_daily_uses=F('current_daily_uses') + 1,
-                health_status=JobSource.HealthStatus.HEALTHY,
-                last_run_at=now,
+            from core.services.daily_usage import bump_daily_usage
+            bump_daily_usage(
+                JobSource.objects.filter(pk=source.pk),
+                extra={
+                    'health_status': JobSource.HealthStatus.HEALTHY,
+                    'last_run_at': now,
+                },
             )
             try:
                 provider.persist_credit_usage()

@@ -313,14 +313,14 @@ function SidebarNav({
       <Link
         href="/"
         onClick={onNavigate}
-        className="flex h-16 shrink-0 items-center px-5"
+        className="flex h-16 shrink-0 items-end p-4 gap-1"
       >
         <img
           src={logoSrc}
           alt="DemandAccel AI"
           className="h-8 w-auto object-contain"
         />
-        <h1 className="text-2xl font-bold text-[#293D34]">emand Accel</h1>
+        <h1 className="text-2xl font-bold text-[#27A77C]"> emand Accel</h1>
       </Link>
 
       <nav className="flex flex-1 flex-col gap-5 overflow-y-auto px-3 pb-3 pt-1">

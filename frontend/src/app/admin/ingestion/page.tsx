@@ -196,15 +196,22 @@ function normalizeSchedule(raw: Schedule): Schedule {
 }
 
 
+function localDateString(d = new Date()): string {
+  const y = d.getFullYear()
+  const m = String(d.getMonth() + 1).padStart(2, "0")
+  const day = String(d.getDate()).padStart(2, "0")
+  return `${y}-${m}-${day}`
+}
+
 function parse12hTime(time12h: string): { hours24: number; minutes: number } {
-  const match = time12h.match(/^(\d{1,2}):(\d{2})\s*(AM|PM)$/i)
+  const match = time12h.trim().match(/^(\d{1,2}):(\d{2})(?:\s*([AaPp]\.?[Mm]\.?))?$/)
   if (!match) return { hours24: 9, minutes: 0 }
   let h = parseInt(match[1], 10)
   const m = parseInt(match[2], 10)
-  const period = match[3].toUpperCase()
+  const period = match[3] ? match[3].replace(/\./g, "").toUpperCase() : ""
   if (period === "AM") {
     if (h === 12) h = 0
-  } else {
+  } else if (period === "PM") {
     if (h !== 12) h += 12
   }
   return { hours24: h, minutes: m }
@@ -219,10 +226,17 @@ function fromTimeInputValue(value: string): string {
   const [hourStr, minuteStr] = value.split(":")
   let h = parseInt(hourStr || "9", 10)
   const m = parseInt(minuteStr || "0", 10)
+  if (Number.isNaN(h) || Number.isNaN(m)) return "9:00 AM"
   const period = h >= 12 ? "PM" : "AM"
   h = h % 12
   if (h === 0) h = 12
   return `${h}:${String(m).padStart(2, "0")} ${period}`
+}
+
+function localTime12h(d = new Date()): string {
+  return fromTimeInputValue(
+    `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`,
+  )
 }
 
 
@@ -361,10 +375,10 @@ export default function AdminIngestionPage() {
   const [savingSchedule, setSavingSchedule] = useState(false)
   const [scheduleForm, setScheduleForm] = useState<Partial<Schedule>>({
     frequency: "daily",
-    time: "9:00 AM",
+    time: localTime12h(),
     dayOfWeek: 1,
     dayOfMonth: 1,
-    startDate: new Date().toISOString().split("T")[0],
+    startDate: localDateString(),
     totalRuns: 0,
     enabled: true,
     source_id: "all",
@@ -484,7 +498,7 @@ export default function AdminIngestionPage() {
 
   useEffect(() => {
     if (!autoRefresh) return
-    const id = setInterval(refresh, 15_000)
+    const id = setInterval(refresh, 30_000)
     return () => clearInterval(id)
   }, [autoRefresh, refresh])
 
@@ -524,7 +538,7 @@ export default function AdminIngestionPage() {
         time: scheduleForm.time || "9:00 AM",
         dayOfWeek: scheduleForm.dayOfWeek ?? 1,
         dayOfMonth: scheduleForm.dayOfMonth ?? 1,
-        startDate: scheduleForm.startDate || new Date().toISOString().split("T")[0],
+        startDate: scheduleForm.startDate || localDateString(),
         totalRuns: scheduleForm.totalRuns || 0,
         enabled: true,
       })
@@ -700,7 +714,7 @@ export default function AdminIngestionPage() {
                   className={cn("size-4", autoRefresh && "animate-spin")}
                   data-icon="inline-start"
                 />
-                {autoRefresh ? "Auto-refresh on" : "Auto-refresh off"}
+                {autoRefresh ? "Auto-refresh 30s" : "Auto-refresh off"}
               </Button>
               {selectedRuns.size > 0 && (
                 <Button
@@ -1517,7 +1531,7 @@ export default function AdminIngestionPage() {
                 </Select>
               </div>
               <div className="flex flex-col gap-2">
-                <Label htmlFor="schedule-time">Time</Label>
+                <Label htmlFor="schedule-time">Time (India)</Label>
                 <Input
                   id="schedule-time"
                   type="time"
@@ -1578,7 +1592,7 @@ export default function AdminIngestionPage() {
                 <Label>Start date</Label>
                 <Input
                   type="date"
-                  value={scheduleForm.startDate || new Date().toISOString().split("T")[0]}
+                  value={scheduleForm.startDate || localDateString()}
                   onChange={(e) =>
                     setScheduleForm({ ...scheduleForm, startDate: e.target.value })
                   }

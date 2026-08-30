@@ -16,6 +16,7 @@ from .ingestion_models import (
     MasterTechnology,
 )
 from .models import IngestionRun, IngestionSchedule, JobSource, RawJob
+from .services.daily_usage import ensure_daily_usage_counter
 from .services.scheduling import calculate_next_run
 
 User = get_user_model()
@@ -102,6 +103,10 @@ class JobSourceSerializer(serializers.ModelSerializer):
 
     def get_auth_configured(self, obj):
         return obj.has_auth_config()
+
+    def to_representation(self, instance):
+        ensure_daily_usage_counter(instance)
+        return super().to_representation(instance)
 
     def create(self, validated_data):
         auth_config = validated_data.pop('auth_config', None)

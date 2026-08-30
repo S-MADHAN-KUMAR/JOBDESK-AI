@@ -390,7 +390,7 @@ export default function AdminEnrichmentSourcesPage() {
                       <div className="rounded-lg border bg-muted/30 p-3">
                         <p className="flex items-center gap-1.5 text-xs text-muted-foreground">
                           <Activity className="size-3.5" />
-                          Daily usage
+                          Daily usage (today)
                         </p>
                         <p className="mt-1 text-lg font-semibold">
                           {source.current_daily_uses}{" "}

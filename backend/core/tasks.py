@@ -2,6 +2,7 @@
 
 import logging
 import re
+import uuid
 from datetime import datetime, timezone
 
 from celery import shared_task
@@ -28,6 +29,13 @@ def _truncate(value: str, max_length: int = 255) -> str:
     if len(value) > max_length:
         return value[:max_length - 3] + '...'
     return value
+
+
+def _safe_celery_task_id(task_id) -> str:
+    """Postgres celery_task_id is NOT NULL; Celery .run() often has request.id=None."""
+    if task_id:
+        return str(task_id)
+    return str(uuid.uuid4())
 
 
 @shared_task(bind=True, name='core.tasks.run_scheduled_ingestion')
@@ -98,7 +106,7 @@ def run_provider_ingestion(self, source_id: str, keyword: str = '', location: st
     elif source.default_params.get('platforms'):
         filters['platforms'] = source.default_params.get('platforms')
 
-    return _run_single_provider(source, filters, task_id=self.request.id)
+    return _run_single_provider(source, filters, task_id=_safe_celery_task_id(self.request.id))
 
 
 @shared_task(bind=True, name='core.tasks.run_all_provider_ingestions')
@@ -137,7 +145,11 @@ def run_all_provider_ingestions(self, keyword: str = '', location: str = '', cou
             filters['platforms'] = source.default_params.get('platforms')
 
         try:
-            results.append(_run_single_provider(source, filters, task_id=self.request.id))
+            results.append(
+                _run_single_provider(
+                    source, filters, task_id=_safe_celery_task_id(self.request.id),
+                )
+            )
         except Exception as exc:
             logger.error(f'Manual provider {source.provider_code} failed: {exc}')
             results.append({
@@ -285,7 +297,7 @@ def _run_single_provider(source: JobSource, filters: dict = None, task_id: str =
     run = IngestionRun.objects.create(
         provider=source,
         status=IngestionRun.Status.RUNNING,
-        celery_task_id=task_id,
+        celery_task_id=_safe_celery_task_id(task_id),
         started_at=now,
     )
 
@@ -341,10 +353,13 @@ def _run_single_provider(source: JobSource, filters: dict = None, task_id: str =
         run.ended_at = datetime.now(timezone.utc)
         run.save()
 
-        JobSource.objects.filter(pk=source.pk).update(
-            current_daily_uses=F('current_daily_uses') + 1,
-            health_status=JobSource.HealthStatus.HEALTHY,
-            last_run_at=now,
+        from core.services.daily_usage import bump_daily_usage
+        bump_daily_usage(
+            JobSource.objects.filter(pk=source.pk),
+            extra={
+                'health_status': JobSource.HealthStatus.HEALTHY,
+                'last_run_at': now,
+            },
         )
         try:
             provider.persist_credit_usage()
@@ -435,10 +450,13 @@ def run_ingestion_schedule(self, schedule_id: str):
                     errors.append(f'{source.provider_code}: credentials not configured')
                     continue
                 platforms = _schedule_platforms_for_source(schedule, source)
-                result = run_provider_ingestion.run(
-                    source_id=str(source.id),
-                    platforms=platforms,
-                    **base_kwargs,
+                filters = {**base_kwargs}
+                if platforms is not None:
+                    filters['platforms'] = platforms
+                result = _run_single_provider(
+                    source,
+                    filters,
+                    task_id=_safe_celery_task_id(self.request.id),
                 )
                 if isinstance(result, dict) and not result.get('success', True):
                     errors.append(
@@ -450,10 +468,13 @@ def run_ingestion_schedule(self, schedule_id: str):
             except JobSource.DoesNotExist:
                 raise ValueError('Source not found')
             platforms = _schedule_platforms_for_source(schedule, source)
-            result = run_provider_ingestion.run(
-                source_id=str(source.id),
-                platforms=platforms,
-                **base_kwargs,
+            filters = {**base_kwargs}
+            if platforms is not None:
+                filters['platforms'] = platforms
+            result = _run_single_provider(
+                source,
+                filters,
+                task_id=_safe_celery_task_id(self.request.id),
             )
             if isinstance(result, dict) and not result.get('success', True):
                 errors.append(str(result.get('error') or result.get('status') or 'failed'))

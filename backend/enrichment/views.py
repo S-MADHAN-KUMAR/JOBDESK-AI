@@ -385,9 +385,10 @@ class EnrichmentRunView(APIView):
         run.save()
 
         if used:
-            EnrichmentSource.objects.filter(provider_code__in=used).update(
-                current_daily_uses=F('current_daily_uses') + 1,
-                last_run_at=datetime.now(timezone.utc),
+            from core.services.daily_usage import bump_daily_usage
+            bump_daily_usage(
+                EnrichmentSource.objects.filter(provider_code__in=used),
+                extra={'last_run_at': datetime.now(timezone.utc)},
             )
             # Refresh live credit balances after enrichment spend.
             for code in used:
