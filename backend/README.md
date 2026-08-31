@@ -11,6 +11,15 @@ uv run python manage.py migrate
 uv run python manage.py runserver
 ```
 
+Docker Compose (frontend, API, Redis, Celery worker, Celery beat) from the repo root:
+
+```bash
+cp .env.example .env        # or keep using backend/.env
+docker compose up --build
+```
+
+VPS with Nginx on port 80: `docker compose --profile prod up --build -d`
+
 ## Endpoints
 
 Authentication (JWT, Simple JWT + Redis token blacklist):

@@ -253,7 +253,9 @@ function formatScheduleNext(nextRun: string | null | undefined, nowMs = Date.now
 }
 
 function getCountdownParts(nextRun: string | null | undefined, nowMs: number) {
-  if (!nextRun) return { totalMs: 0, days: 0, hours: 0, minutes: 0, seconds: 0, overdue: false }
+  if (!nextRun) {
+    return { h: 0, m: 0, s: 0, totalMs: 0, overdue: false }
+  }
   const diffMs = new Date(nextRun).getTime() - nowMs
   if (diffMs <= 0) {
     return { h: 0, m: 0, s: 0, totalMs: diffMs, overdue: true }

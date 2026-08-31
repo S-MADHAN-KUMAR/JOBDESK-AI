@@ -1,0 +1,15 @@
+node_modules
+.next
+out
+build
+coverage
+.env
+.env.local
+.env.*.local
+!.env.example
+*.tsbuildinfo
+.git
+.gitignore
+README.md
+AGENTS.md
+CLAUDE.md

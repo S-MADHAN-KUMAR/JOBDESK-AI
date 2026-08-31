@@ -47,12 +47,29 @@ from rest_framework.permissions import AllowAny
 @api_view(['GET'])
 @permission_classes([AllowAny])
 def health_check(request):
-    cache.set('health_check', 'ok', timeout=30)
-    cache_ok = cache.get('health_check') == 'ok'
-    return Response({
-        'status': 'ok',
-        'cache': 'ok' if cache_ok else 'unreachable',
-    })
+    cache_ok = False
+    db_ok = False
+    try:
+        cache.set('health_check', 'ok', timeout=30)
+        cache_ok = cache.get('health_check') == 'ok'
+    except Exception:
+        cache_ok = False
+    try:
+        from django.db import connection
+        with connection.cursor() as cursor:
+            cursor.execute('SELECT 1')
+            db_ok = cursor.fetchone() is not None
+    except Exception:
+        db_ok = False
+    ok = cache_ok and db_ok
+    return Response(
+        {
+            'status': 'ok' if ok else 'degraded',
+            'cache': 'ok' if cache_ok else 'unreachable',
+            'database': 'ok' if db_ok else 'unreachable',
+        },
+        status=status.HTTP_200_OK if ok else status.HTTP_503_SERVICE_UNAVAILABLE,
+    )
 
 
 class AdminUserViewSet(viewsets.ModelViewSet):
