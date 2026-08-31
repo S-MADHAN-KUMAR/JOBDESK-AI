@@ -12,7 +12,13 @@ export function QueryProvider({ children }: { children: React.ReactNode }) {
             staleTime: 30 * 1000,
             gcTime: 5 * 60 * 1000,
             refetchOnWindowFocus: false,
-            retry: 1,
+            retry: (count, error) => {
+              const message = error instanceof Error ? error.message : ""
+              if (message.includes("401") || message.includes("Session expired")) {
+                return false
+              }
+              return count < 1
+            },
           },
         },
       })

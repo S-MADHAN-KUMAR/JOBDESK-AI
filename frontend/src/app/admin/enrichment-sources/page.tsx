@@ -102,7 +102,6 @@ type FormState = {
   rate_limit_daily: string
   max_results: string
   titles: string
-  webhook_url: string
 }
 
 const emptyForm: FormState = {
@@ -113,7 +112,6 @@ const emptyForm: FormState = {
   rate_limit_daily: "500",
   max_results: "25",
   titles: "Recruiter, Talent Acquisition, HR",
-  webhook_url: "",
 }
 
 function formFromSource(source: EnrichmentSource): FormState {
@@ -126,16 +124,22 @@ function formFromSource(source: EnrichmentSource): FormState {
     rate_limit_daily: String(source.rate_limit_daily),
     max_results: String(params.max_results ?? "25"),
     titles: String(params.titles ?? ""),
-    webhook_url: String(params.webhook_url ?? ""),
   }
 }
 
-function formToInput(form: FormState): EnrichmentSourceInput {
+function formToInput(
+  form: FormState,
+  existingParams?: Record<string, unknown>,
+): EnrichmentSourceInput {
   const default_params: Record<string, string | number> = {
     max_results: Math.max(1, Number(form.max_results) || 25),
   }
   if (form.titles.trim()) default_params.titles = form.titles.trim()
-  if (form.webhook_url.trim()) default_params.webhook_url = form.webhook_url.trim()
+  // Preserve stored Apollo webhook URL (configured outside this dialog).
+  const existingWebhook = existingParams?.webhook_url
+  if (typeof existingWebhook === "string" && existingWebhook.trim()) {
+    default_params.webhook_url = existingWebhook.trim()
+  }
   return {
     name: form.name.trim(),
     provider_code: form.provider_code.trim().toLowerCase(),
@@ -186,7 +190,10 @@ export default function AdminEnrichmentSourcesPage() {
     setSaving(true)
     try {
       if (editing) {
-        await updateEnrichmentSource(editing.id, formToInput(form))
+        await updateEnrichmentSource(
+          editing.id,
+          formToInput(form, editing.default_params),
+        )
         toast.success("Provider updated successfully.")
       } else {
         await createEnrichmentSource(formToInput(form))
@@ -544,10 +551,6 @@ export default function AdminEnrichmentSourcesPage() {
                         <span className="font-medium">Max results:</span>{" "}
                         {source.default_params.max_results || "—"}
                       </p>
-                      <p className="truncate">
-                        <span className="font-medium">Apollo webhook:</span>{" "}
-                        {source.default_params.webhook_url || "not set"}
-                      </p>
                     </div>
 
                     <div className="mt-auto flex flex-wrap items-center gap-2 pt-1">
@@ -697,25 +700,6 @@ export default function AdminEnrichmentSourcesPage() {
                     placeholder="Recruiter, Talent Acquisition, HR"
                   />
                 </div>
-              </div>
-              <div className="flex flex-col gap-2">
-                <Label htmlFor="source-webhook">
-                  Apollo phone webhook URL
-                </Label>
-                <Input
-                  id="source-webhook"
-                  type="url"
-                  value={form.webhook_url}
-                  onChange={(e) =>
-                    setForm({ ...form, webhook_url: e.target.value })
-                  }
-                  placeholder="https://your-public-endpoint.com/apollo-webhook"
-                />
-                <p className="text-xs text-muted-foreground">
-                  Apollo only delivers phone numbers asynchronously. Setting a
-                  public HTTPS URL here enables phone reveal for Apollo and the
-                  results are polled into enriched contacts.
-                </p>
               </div>
             </div>
             <DialogFooter>

@@ -3,6 +3,7 @@
 import { useEffect } from "react"
 import Link from "next/link"
 import { useRouter } from "next/navigation"
+import { Loader2 } from "lucide-react"
 import {
   ArrowUpRight,
   BarChart3,
@@ -111,13 +112,23 @@ function relativeTime(iso: string | null): string {
 export default function Home() {
   const router = useRouter()
   const { data: me, isLoading: loading, error } = useProfile()
-  const { data: overview, isLoading: overviewLoading } = useDashboardOverview()
+  const { data: overview, isLoading: overviewLoading } = useDashboardOverview(
+    Boolean(me),
+  )
 
   useEffect(() => {
-    if (error) router.push("/login")
+    if (error) router.replace("/login")
   }, [error, router])
 
-  if (!me) return null
+  if (error) return null
+
+  if (loading || !me) {
+    return (
+      <div className="flex min-h-dvh items-center justify-center bg-background text-muted-foreground">
+        <Loader2 className="size-6 animate-spin" />
+      </div>
+    )
+  }
 
   const visibleLinks = QUICK_LINKS.filter((link) =>
     link.roles.includes(me.role),

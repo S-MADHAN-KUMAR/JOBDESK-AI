@@ -49,6 +49,7 @@ export function useProfile() {
     queryFn: fetchProfile,
     staleTime: 2 * 60 * 1000,
     gcTime: 10 * 60 * 1000,
+    retry: false,
   })
 }
 
@@ -321,12 +322,14 @@ export function useEnrichmentCompanies() {
   })
 }
 
-export function useDashboardOverview() {
+export function useDashboardOverview(enabled = true) {
   return useQuery({
     queryKey: ["dashboardOverview"],
     queryFn: fetchDashboardOverview,
     staleTime: 60 * 1000,
     gcTime: 5 * 60 * 1000,
+    enabled,
+    retry: false,
   })
 }
 

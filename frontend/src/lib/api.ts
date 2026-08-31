@@ -87,6 +87,7 @@ async function refreshSession(): Promise<void> {
     body: JSON.stringify({}),
   })
   if (!res.ok) {
+    await logout()
     throw new Error("Session expired")
   }
 }
@@ -108,7 +109,10 @@ export async function apiFetch<T>(
 
   let res = await request()
 
-  if (res.status === 401 && !path.startsWith("/auth/")) {
+  const canRefresh =
+    res.status === 401 &&
+    (!path.startsWith("/auth/") || path === "/auth/profile/")
+  if (canRefresh) {
     refreshing = refreshing ?? refreshSession().catch((err) => {
       refreshing = null
       throw err
