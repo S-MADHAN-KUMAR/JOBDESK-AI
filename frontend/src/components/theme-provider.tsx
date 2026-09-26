@@ -30,12 +30,22 @@ function getInitialTheme(): Theme {
 }
 
 export function ThemeProvider({ children }: { children: React.ReactNode }) {
-  const [theme, setTheme] = useState<Theme>(getInitialTheme)
+  // Use a deterministic initial value so server and first client render match.
+  // The real theme is synced from localStorage / media query after mount.
+  const [theme, setTheme] = useState<Theme>("light")
+  const [mounted, setMounted] = useState(false)
 
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- sync theme after mount to avoid hydration mismatch
+    setTheme(getInitialTheme())
+    setMounted(true)
+  }, [])
+
+  useEffect(() => {
+    if (!mounted) return
     document.documentElement.classList.toggle("dark", theme === "dark")
     window.localStorage.setItem("demandaccel_theme", theme)
-  }, [theme])
+  }, [theme, mounted])
 
   const toggleTheme = useCallback(() => {
     setTheme((current) => (current === "dark" ? "light" : "dark"))
