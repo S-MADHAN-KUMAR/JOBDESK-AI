@@ -26,8 +26,14 @@ export function AppShell({
       />
       <div className="flex min-h-dvh flex-col lg:pl-64">
         <Navbar user={user} onMenuClick={() => setDrawerOpen(true)} />
-        <main className="flex-1">
-          {loading ? <ContentSkeleton /> : children}
+        <main className="flex-1 bg-background">
+          {loading ? (
+            <div className="wrap section-rhythm">
+              <ContentSkeleton />
+            </div>
+          ) : (
+            children
+          )}
         </main>
       </div>
     </div>

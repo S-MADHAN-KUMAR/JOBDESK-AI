@@ -29,7 +29,6 @@ import {
 import { Button } from "@/components/ui/button"
 import { type User, logout } from "@/lib/api"
 import { cn } from "@/lib/utils"
-import { useTheme } from "@/components/theme-provider"
 
 type NavItem = {
   href: string
@@ -201,14 +200,21 @@ function NavLink({
       onClick={onNavigate}
       aria-current={active ? "page" : undefined}
       className={cn(
-        "flex h-10 w-full items-center gap-3 rounded-xl px-3 text-sm font-medium transition-colors",
+        "group relative flex h-9 w-full items-center gap-3 rounded-lg px-3 text-[13px] font-medium transition-colors",
         active
-          ? "bg-primary text-primary-foreground shadow-sm"
+          ? "bg-sidebar-accent text-sidebar-accent-foreground"
           : "text-sidebar-foreground hover:bg-muted hover:text-foreground",
       )}
     >
+      <span
+        aria-hidden
+        className={cn(
+          "absolute left-0 top-1/2 h-5 w-[3px] -translate-y-1/2 rounded-full bg-primary transition-opacity",
+          active ? "opacity-100" : "opacity-0 group-hover:opacity-40",
+        )}
+      />
       <item.icon
-        className={cn("size-4 shrink-0", active ? "opacity-100" : "opacity-80")}
+        className={cn("size-4 shrink-0", active ? "opacity-100" : "opacity-70")}
         strokeWidth={active ? 2.25 : 1.75}
       />
       <span className="min-w-0 truncate leading-none">{item.label}</span>
@@ -245,7 +251,7 @@ function CollapsibleGroup({
         type="button"
         onClick={() => setOpen((prev) => !prev)}
         className={cn(
-          "flex h-7 w-full items-center gap-2 px-3 text-[11px] font-semibold uppercase tracking-[0.08em] transition-colors",
+          "flex h-7 w-full items-center gap-2 px-3 font-mono text-[11px] font-medium uppercase tracking-[0.08em] transition-colors",
           hasActive
             ? "text-primary"
             : "text-muted-foreground hover:text-foreground",
@@ -261,7 +267,7 @@ function CollapsibleGroup({
           )}
         />
       </button>
-      <div className="mx-3 border-t border-border/80" />
+      <div className="mx-3 border-t border-sidebar-border" />
 
       <AnimatePresence initial={false}>
         {open && (
@@ -298,32 +304,30 @@ function SidebarNav({
 }) {
   const pathname = usePathname()
   const router = useRouter()
-  const { theme } = useTheme()
 
   async function handleLogout() {
     await logout()
     router.push("/login")
   }
 
-  const logoSrc =
-    theme === "dark" ? "/logo.png" : "/logo.png"
-
   return (
     <div className="flex h-full flex-col bg-sidebar">
+      {/* Inline-minimal wordmark row — N1 archetype */}
       <Link
         href="/"
         onClick={onNavigate}
-        className="flex h-16 shrink-0 items-end p-4 gap-1"
+        className="flex h-16 shrink-0 items-center gap-2.5 border-b border-sidebar-border px-4"
       >
-        <img
-          src={logoSrc}
-          alt="JOBDESK-AI"
-          className="h-8 w-auto object-contain"
-        />
-        <h1 className="text-2xl font-bold text-[#27A77C]">JOBDESK-AI</h1>
+        <img src="/logo.png" alt=""  className="w-6 h-6"/>
+        <span className="min-w-0 flex-1 leading-none">
+          <span className="block truncate text-[15px] font-bold tracking-tight text-foreground">
+            JOBDESK-AI
+          </span>
+        
+        </span>
       </Link>
 
-      <nav className="flex flex-1 flex-col gap-5 overflow-y-auto px-3 pb-3 pt-1">
+      <nav className="flex flex-1 flex-col gap-5 overflow-y-auto px-3 pb-3 pt-4">
         {NAV_GROUPS.map((group) => {
           if (group.collapsible) {
             return (
@@ -347,10 +351,10 @@ function SidebarNav({
 
           return (
             <div key={group.label} className="flex flex-col gap-1.5">
-              <p className="px-3 text-[11px] font-semibold uppercase tracking-[0.08em] text-muted-foreground">
+              <p className="px-3 font-mono text-[11px] font-medium uppercase tracking-[0.08em] text-muted-foreground">
                 {group.label}
               </p>
-              <div className="mx-3 border-t border-border/80" />
+              <div className="mx-3 border-t border-sidebar-border" />
               <div className="flex flex-col gap-0.5 pt-1">
                 {items.map((item) => (
                   <NavLink
@@ -367,10 +371,23 @@ function SidebarNav({
       </nav>
 
       <div className="flex shrink-0 flex-col gap-2 border-t border-sidebar-border p-3">
+        <div className="flex items-center gap-2.5 rounded-lg px-1 py-1">
+          <span className="flex size-8 shrink-0 items-center justify-center rounded-full bg-banner text-[11px] font-bold text-banner-foreground">
+            {`${user.first_name?.[0] ?? ""}${user.last_name?.[0] ?? user.username?.[0] ?? ""}`.toUpperCase()}
+          </span>
+          <div className="min-w-0 flex-1 leading-tight">
+            <p className="truncate text-[13px] font-semibold text-foreground">
+              {`${user.first_name} ${user.last_name}`.trim() || user.username}
+            </p>
+            <p className="truncate font-mono text-[10px] uppercase tracking-[0.08em] text-muted-foreground">
+              {user.role.replace(/_/g, " ")}
+            </p>
+          </div>
+        </div>
         <Button
           variant="ghost"
           size="sm"
-          className="h-9 w-full justify-start gap-3 rounded-xl px-3 text-destructive hover:bg-destructive/10 hover:text-destructive"
+          className="h-9 w-full justify-start gap-3 rounded-lg px-3 text-destructive hover:bg-destructive/10 hover:text-destructive"
           onClick={handleLogout}
         >
           <LogOut className="size-4" />
@@ -404,12 +421,14 @@ export function Sidebar({
       >
         <Drawer.Portal>
           <Drawer.Backdrop className="fixed inset-0 z-40 bg-black/40 backdrop-blur-sm" />
-          <Drawer.Popup className="fixed inset-y-0 left-0 z-50 w-72 max-w-[85vw] bg-sidebar shadow-xl ring-1 ring-sidebar-border">
-            <SidebarNav
-              user={user}
-              onNavigate={() => onDrawerOpenChange(false)}
-            />
-          </Drawer.Popup>
+          <Drawer.Viewport className="fixed inset-0 z-50">
+            <Drawer.Popup className="fixed inset-y-0 left-0 w-72 max-w-[85vw] bg-sidebar shadow-xl ring-1 ring-sidebar-border">
+              <SidebarNav
+                user={user}
+                onNavigate={() => onDrawerOpenChange(false)}
+              />
+            </Drawer.Popup>
+          </Drawer.Viewport>
         </Drawer.Portal>
       </Drawer.Root>
     </>

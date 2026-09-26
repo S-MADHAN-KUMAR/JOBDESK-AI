@@ -168,9 +168,9 @@ export default function CEODashboardPage() {
                       {brief.rising_roles.length === 0 ? (
                         <span className="text-xs text-muted-foreground">None</span>
                       ) : (
-                        brief.rising_roles.map((r) => (
+                        brief.rising_roles.map((r, i) => (
                           <Badge
-                            key={r.role_category}
+                            key={`${r.role_category}-${i}`}
                             variant="outline"
                             className="border-transparent bg-emerald-500/10 text-emerald-700 dark:text-emerald-400"
                           >
@@ -192,9 +192,9 @@ export default function CEODashboardPage() {
                       {brief.declining_roles.length === 0 ? (
                         <span className="text-xs text-muted-foreground">None</span>
                       ) : (
-                        brief.declining_roles.map((r) => (
+                        brief.declining_roles.map((r, i) => (
                           <Badge
-                            key={r.role_category}
+                            key={`${r.role_category}-${i}`}
                             variant="outline"
                             className="border-transparent bg-red-500/10 text-red-700 dark:text-red-400"
                           >
@@ -215,9 +215,9 @@ export default function CEODashboardPage() {
                       Priority Employers
                     </p>
                     <div className="flex flex-wrap gap-2">
-                      {brief.priority_employers.map((e) => (
+                      {brief.priority_employers.map((e, i) => (
                         <Link
-                          key={e.company_id}
+                          key={`${e.company_id}-${i}`}
                           href={`/companies/${e.company_id}`}
                           className="inline-flex items-center gap-2 rounded-full border bg-card px-3 py-1 text-xs font-medium transition-colors hover:border-primary/40 hover:bg-primary/5"
                         >

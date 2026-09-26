@@ -33,15 +33,16 @@ export function Navbar({
 }) {
   const pathname = usePathname()
   const router = useRouter()
-  const isDashboard = pathname === "/"
 
   async function handleLogout() {
     await logout()
     router.push("/login")
   }
 
+  const crumbs = pathname === "/" ? ["Overview"] : pathname.split("/").filter(Boolean).map((s) => s.replace(/-/g, " "))
+
   return (
-    <header className="sticky top-0 z-30 h-16 shrink-0 border-b border-border/80 bg-card">
+    <header className="sticky top-0 z-30 h-16 shrink-0 border-b border-border bg-card/90 backdrop-blur">
       <div className="flex h-full w-full items-center gap-3 px-4 sm:px-6">
         <Button
           variant="ghost"
@@ -54,20 +55,12 @@ export function Navbar({
         </Button>
 
         <div className="min-w-0 flex-1">
-          {isDashboard ? (
-            <div className="min-w-0">
-              <h1 className="truncate text-lg font-bold tracking-tight text-foreground sm:text-xl">
-                Welcome back, {displayName(user)}!
-              </h1>
-              <p className="hidden truncate text-xs text-muted-foreground sm:block">
-                Here&apos;s your demand intelligence overview.
-              </p>
-            </div>
-          ) : (
-            <p className="truncate text-sm text-muted-foreground lg:hidden">
-              JOBDESK-AI
-            </p>
-          )}
+          <p className="truncate font-mono text-[11px] uppercase tracking-[0.08em] text-muted-foreground">
+            {crumbs.join(" / ")}
+          </p>
+          <h1 className="truncate text-[15px] font-bold tracking-tight text-foreground">
+            Welcome back, {displayName(user)}
+          </h1>
         </div>
 
         <div className="flex shrink-0 items-center gap-1 sm:gap-2">

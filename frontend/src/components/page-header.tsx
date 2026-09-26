@@ -6,6 +6,7 @@ export function PageHeader({
   description,
   actions,
   icon: Icon,
+  eyebrow,
   variant = "default",
   className,
 }: {
@@ -13,6 +14,7 @@ export function PageHeader({
   description?: string
   actions?: ReactNode
   icon?: React.ComponentType<{ className?: string }>
+  eyebrow?: string
   variant?: "default" | "banner"
   className?: string
 }) {
@@ -20,7 +22,7 @@ export function PageHeader({
     return (
       <div
         className={cn(
-          "flex flex-col gap-4 rounded-2xl bg-banner px-5 py-5 text-banner-foreground shadow-sm sm:flex-row sm:items-center sm:justify-between sm:px-6",
+          "promo-card-bg flex flex-col gap-4 rounded-2xl px-5 py-5 text-banner-foreground shadow-sm sm:flex-row sm:items-center sm:justify-between sm:px-6",
           className,
         )}
       >
@@ -31,7 +33,12 @@ export function PageHeader({
             </span>
           ) : null}
           <div className="flex min-w-0 flex-col gap-1">
-            <h1 className="text-xl font-bold tracking-tight sm:text-2xl">
+            {eyebrow ? (
+              <p className="font-mono text-[11px] uppercase tracking-[0.08em] text-white/60">
+                {eyebrow}
+              </p>
+            ) : null}
+            <h1 className="font-display text-xl tracking-tight sm:text-2xl">
               {title}
             </h1>
             {description ? (
@@ -53,12 +60,17 @@ export function PageHeader({
   return (
     <div
       className={cn(
-        "flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between",
+        "flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between",
         className,
       )}
     >
       <div className="flex min-w-0 flex-col gap-1">
-        <h1 className="text-2xl font-bold tracking-tight text-foreground">
+        {eyebrow ? (
+          <p className="font-mono text-[11px] uppercase tracking-[0.08em] text-muted-foreground">
+            {eyebrow}
+          </p>
+        ) : null}
+        <h1 className="font-display text-2xl tracking-tight text-foreground sm:text-[28px]">
           {title}
         </h1>
         {description ? (
@@ -79,7 +91,8 @@ export function StatCard({
   value,
   hint,
   icon: Icon,
-  tone = "green",
+  tone = "blue",
+  delta,
   className,
 }: {
   label: string
@@ -87,6 +100,7 @@ export function StatCard({
   hint?: string
   icon?: React.ComponentType<{ className?: string }>
   tone?: "blue" | "purple" | "rose" | "green" | "amber" | "slate"
+  delta?: string
   className?: string
 }) {
   const toneClass = {
@@ -101,23 +115,65 @@ export function StatCard({
   return (
     <div
       className={cn(
-        "flex flex-col gap-3 rounded-2xl p-5 shadow-xs",
-        toneClass,
+        "bento-tile flex flex-col gap-3 p-5",
         className,
       )}
     >
-      <div className="flex items-start justify-between gap-3">
-        <p className="text-sm font-medium opacity-80">{label}</p>
+      <div className="flex items-center justify-between gap-3">
+        <p className="text-meta text-muted-foreground">{label}</p>
         {Icon ? (
-          <span className="flex size-9 shrink-0 items-center justify-center rounded-xl bg-white/70 dark:bg-black/20">
+          <span className={cn("flex size-8 shrink-0 items-center justify-center rounded-lg", toneClass)}>
             <Icon className="size-4" />
           </span>
         ) : null}
       </div>
-      <p className="text-3xl font-bold tracking-tight text-foreground">{value}</p>
-      {hint ? (
-        <p className="text-xs font-medium opacity-70">{hint}</p>
-      ) : null}
+      <p className="stat-num font-display text-[32px] text-foreground">{value}</p>
+      <div className="mt-auto flex items-center gap-2">
+        {delta ? (
+          <span className="rounded-full bg-primary/10 px-2 py-0.5 font-mono text-[11px] font-medium tabular-nums text-primary">
+            {delta}
+          </span>
+        ) : null}
+        {hint ? (
+          <p className="truncate text-xs text-muted-foreground">{hint}</p>
+        ) : null}
+      </div>
+    </div>
+  )
+}
+
+export function BarList({
+  items,
+  className,
+}: {
+  items: { label: string; value: number; display?: string }[]
+  className?: string
+}) {
+  const max = Math.max(1, ...items.map((i) => i.value))
+  const total = items.reduce((n, i) => n + i.value, 0)
+  return (
+    <div className={className}>
+      <div className="flex flex-wrap items-baseline justify-between gap-y-1">
+        <p className="text-meta text-muted-foreground">By segment</p>
+        <p className="font-mono text-[11px] tabular-nums text-muted-foreground">
+          {total.toLocaleString()} total
+        </p>
+      </div>
+      <ul className="mt-4 space-y-3.5">
+        {items.map((item) => (
+          <li key={item.label}>
+            <p className="flex items-baseline justify-between text-[13px]">
+              <span className="truncate text-foreground">{item.label}</span>
+              <span className="ml-3 shrink-0 font-mono tabular-nums text-muted-foreground">
+                {item.display ?? item.value.toLocaleString()}
+              </span>
+            </p>
+            <div className="bar-track mt-1.5" aria-hidden>
+              <div className="bar-fill" style={{ width: `${(item.value / max) * 100}%` }} />
+            </div>
+          </li>
+        ))}
+      </ul>
     </div>
   )
 }
@@ -134,14 +190,14 @@ export function EmptyState({
   action?: ReactNode
 }) {
   return (
-    <div className="flex flex-col items-center gap-3 px-4 py-16 text-center">
-      <span className="flex size-14 items-center justify-center rounded-full bg-muted text-muted-foreground">
-        <Icon className="size-6" />
+    <div className="flex flex-col items-center gap-3 rounded-xl border border-dashed border-border px-4 py-12 text-center">
+      <span className="flex size-12 items-center justify-center rounded-full bg-muted text-muted-foreground">
+        <Icon className="size-5" />
       </span>
       <div className="flex flex-col gap-1">
-        <p className="font-medium text-foreground">{title}</p>
+        <p className="text-sm font-semibold text-foreground">{title}</p>
         {description ? (
-          <p className="max-w-sm text-sm text-muted-foreground">{description}</p>
+          <p className="max-w-sm text-[13px] leading-relaxed text-muted-foreground">{description}</p>
         ) : null}
       </div>
       {action}

@@ -14,8 +14,8 @@ const inter = Inter({
 const themeInitScript = `(function(){try{var t=localStorage.getItem('demandaccel_theme');if(t==='dark'||(!t&&window.matchMedia('(prefers-color-scheme: dark)').matches)){document.documentElement.classList.add('dark')}}catch(e){}})();`;
 
 export const metadata: Metadata = {
-  title: "JOBDESK-AI - Dashboard",
-  description: "JOBDESK-AI platform with role-based access control",
+  title: "JOBDESK-AI — Demand intelligence for hiring teams",
+  description: "Track live job postings, demand shifts, skills, and employer signals from one overview.",
 };
 
 export default function RootLayout({ children }: LayoutProps<"/">) {

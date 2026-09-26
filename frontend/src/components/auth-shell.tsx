@@ -43,40 +43,54 @@ export function AuthShell({
 }) {
   return (
     <div className="flex min-h-dvh items-center justify-center bg-background p-4 sm:p-6">
-      <div className="grid w-full max-w-5xl overflow-hidden rounded-2xl border border-border/60 bg-card shadow-sm lg:grid-cols-[1.05fr_1fr]">
-        {/* Lead tile — bento composition: lead idea + supporting tiles */}
-        <div className="flex flex-col gap-6 bg-banner p-6 text-banner-foreground sm:p-8">
-          <p className="text-lg font-bold tracking-tight">JOBDESK-AI</p>
+      <div className="grid w-full max-w-5xl overflow-hidden rounded-2xl border border-border bg-card shadow-lg lg:grid-cols-[1.05fr_1fr]">
+        {/* Lead tile — split-studio: atmospheric panel + bento highlight tiles */}
+        <div className="promo-card-bg flex flex-col gap-6 p-6 text-banner-foreground sm:p-8">
+          <div className="flex items-center justify-between gap-3">
+            <p className="font-display text-lg tracking-tight">JOBDESK-AI</p>
+          </div>
           <div className="flex flex-col gap-2">
-            <h1 className="max-w-[20ch] text-3xl font-bold leading-[1.05] tracking-tight text-balance sm:text-4xl">
+            <p className="font-mono text-[11px] uppercase tracking-[0.08em] text-white/60">
+              Sign in · role-based workspace
+            </p>
+            <h1 className="font-display max-w-[20ch] text-3xl leading-[1.05] tracking-tight text-balance sm:text-4xl">
               Demand intelligence for hiring teams.
             </h1>
-            <p className="max-w-[44ch] text-sm leading-relaxed text-white/75">
-              Sign in to explore postings, track demand shifts, and brief
-              market, training, and recruitment teams.
+            <p className="max-w-[44ch] text-sm leading-relaxed text-white/70">
+              Explore postings, track demand shifts, and brief
+              market, training, and recruitment teams — from one live overview.
             </p>
           </div>
-          <ul className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+          <ul className="grid grid-cols-1 gap-2.5 sm:grid-cols-2">
             {HIGHLIGHTS.map((item) => (
               <li
                 key={item.title}
-                className="flex items-start gap-3 rounded-xl bg-white/10 p-4"
+                className="flex items-start gap-3 rounded-xl border border-white/10 bg-white/[0.07] p-3.5 backdrop-blur-sm"
               >
-                <span className="flex size-9 shrink-0 items-center justify-center rounded-lg bg-white/15">
+                <span className="flex size-9 shrink-0 items-center justify-center rounded-lg bg-white/12">
                   <item.icon className="size-4" />
                 </span>
                 <span className="flex min-w-0 flex-col gap-0.5">
-                  <span className="text-sm font-semibold">{item.title}</span>
-                  <span className="text-xs leading-relaxed text-white/70">
+                  <span className="text-[13px] font-semibold">{item.title}</span>
+                  <span className="text-xs leading-relaxed text-white/65">
                     {item.description}
                   </span>
                 </span>
               </li>
             ))}
           </ul>
-          <p className="mt-auto pt-2 font-mono text-[11px] tracking-wide text-white/60">
-            Role-based access · Admin / Analyst / Training / Recruitment
-          </p>
+          <div className="mt-auto flex items-center gap-6 border-t border-white/10 pt-4">
+            {[
+              { v: "Live", l: "Pipeline" },
+              { v: "7–90d", l: "Trends" },
+              { v: "5 roles", l: "Access" },
+            ].map((s) => (
+              <div key={s.l}>
+                <p className="stat-num font-display text-xl">{s.v}</p>
+                <p className="mt-1 font-mono text-[10px] uppercase tracking-[0.08em] text-white/55">{s.l}</p>
+              </div>
+            ))}
+          </div>
         </div>
 
         {/* Form side — inline-minimal header row: title left, theme utility right */}
@@ -85,7 +99,10 @@ export function AuthShell({
             <ThemeToggle />
           </div>
           <div className="flex flex-col gap-1 pt-6 sm:pt-4">
-            <h2 className="text-2xl font-bold tracking-tight text-foreground">
+            <p className="font-mono text-[11px] uppercase tracking-[0.08em] text-muted-foreground">
+              Welcome back
+            </p>
+            <h2 className="font-display text-2xl tracking-tight text-foreground">
               {title}
             </h2>
             <p className="text-sm leading-relaxed text-muted-foreground">
@@ -94,7 +111,7 @@ export function AuthShell({
           </div>
           {children}
           {footer ? (
-            <div className="mt-auto border-t border-border/60 pt-4 text-center text-sm text-muted-foreground">
+            <div className="mt-auto border-t border-border pt-4 text-center text-sm text-muted-foreground">
               {footer}
             </div>
           ) : null}

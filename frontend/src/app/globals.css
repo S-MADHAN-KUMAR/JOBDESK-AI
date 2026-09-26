@@ -4,42 +4,55 @@
 
 @custom-variant dark (&:is(.dark *));
 
-/* LMS Accel–inspired light theme */
+/* DemandAccel — Inspo-informed design tokens
+   Evidence: grotesk-sans (Inter/Geist) 71%, cool accent #347cec/#0c63db/#0444fb,
+   paper mid/light #f5f5f5, hairline rules, tabular-nums stats.
+   Exemplars: statsig-com, elastic-co, dovetail-com, ghost-org. */
 :root {
-  --background: hsl(210 20% 97%);
-  --foreground: hsl(220 18% 16%);
+  --background: hsl(210 20% 98%);
+  --foreground: hsl(222 28% 11%);
   --card: hsl(0 0% 100%);
-  --card-foreground: hsl(220 18% 16%);
+  --card-foreground: hsl(222 28% 11%);
   --popover: hsl(0 0% 100%);
-  --popover-foreground: hsl(220 18% 16%);
-  --primary: hsl(158 100% 27%);
+  --popover-foreground: hsl(222 28% 11%);
+  --primary: hsl(217 88% 45%);
   --primary-foreground: hsl(0 0% 100%);
-  --secondary: hsl(210 16% 95%);
-  --secondary-foreground: hsl(220 14% 28%);
-  --muted: hsl(210 16% 95%);
-  --muted-foreground: hsl(215 12% 48%);
-  --accent: hsl(158 40% 94%);
-  --accent-foreground: hsl(158 80% 22%);
+  --secondary: hsl(214 24% 95%);
+  --secondary-foreground: hsl(222 18% 28%);
+  --muted: hsl(214 20% 95%);
+  --muted-foreground: hsl(220 10% 46%);
+  --accent: hsl(214 90% 95%);
+  --accent-foreground: hsl(217 88% 38%);
   --destructive: hsl(0 72% 51%);
   --destructive-foreground: hsl(0 0% 100%);
-  --border: hsl(214 18% 90%);
-  --input: hsl(214 18% 92%);
-  --ring: hsl(158 100% 27%);
-  --chart-1: hsl(158 100% 27%);
-  --chart-2: hsl(217 90% 58%);
+  --border: hsl(220 16% 90%);
+  --input: hsl(220 16% 92%);
+  --ring: hsl(217 88% 45%);
+  --chart-1: hsl(217 88% 50%);
+  --chart-2: hsl(174 70% 38%);
   --chart-3: hsl(262 70% 58%);
   --chart-4: hsl(25 95% 53%);
   --chart-5: hsl(340 75% 55%);
   --sidebar: hsl(0 0% 100%);
-  --sidebar-foreground: hsl(215 14% 40%);
-  --sidebar-primary: hsl(158 100% 27%);
+  --sidebar-foreground: hsl(220 12% 42%);
+  --sidebar-primary: hsl(217 88% 45%);
   --sidebar-primary-foreground: hsl(0 0% 100%);
-  --sidebar-accent: hsl(158 40% 95%);
-  --sidebar-accent-foreground: hsl(158 80% 22%);
-  --sidebar-border: hsl(214 18% 92%);
-  --sidebar-ring: hsl(158 100% 27%);
-  --banner: hsl(158 85% 18%);
+  --sidebar-accent: hsl(214 90% 96%);
+  --sidebar-accent-foreground: hsl(217 88% 38%);
+  --sidebar-border: hsl(220 16% 92%);
+  --sidebar-ring: hsl(217 88% 45%);
+  --banner: hsl(224 62% 20%);
   --banner-foreground: hsl(0 0% 100%);
+  /* Inspo role aliases — reference components expect these names */
+  --color-paper: var(--background);
+  --color-ink: var(--foreground);
+  --color-muted: var(--muted-foreground);
+  --color-rule: var(--border);
+  --color-accent: var(--primary);
+  --color-bg: var(--background);
+  --color-fg: var(--foreground);
+  --color-fg-muted: var(--muted-foreground);
+  --color-border: var(--border);
   --font-sans: var(--font-inter), ui-sans-serif, system-ui, sans-serif;
   --font-serif: ui-serif, Georgia, Cambria, "Times New Roman", Times, serif;
   --font-mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
@@ -63,40 +76,49 @@
 }
 
 .dark {
-  --background: hsl(160 8% 8%);
+  --background: hsl(224 24% 9%);
   --foreground: hsl(0 0% 96%);
-  --card: hsl(160 6% 11%);
+  --card: hsl(224 20% 12%);
   --card-foreground: hsl(0 0% 96%);
-  --popover: hsl(160 6% 12%);
+  --popover: hsl(224 20% 13%);
   --popover-foreground: hsl(0 0% 90%);
-  --primary: hsl(158 70% 40%);
+  --primary: hsl(213 90% 60%);
   --primary-foreground: hsl(0 0% 100%);
-  --secondary: hsl(160 8% 16%);
+  --secondary: hsl(224 16% 16%);
   --secondary-foreground: hsl(0 0% 92%);
-  --muted: hsl(160 6% 15%);
-  --muted-foreground: hsl(0 0% 68%);
-  --accent: hsl(158 20% 16%);
-  --accent-foreground: hsl(158 50% 70%);
+  --muted: hsl(224 14% 15%);
+  --muted-foreground: hsl(0 0% 66%);
+  --accent: hsl(217 60% 18%);
+  --accent-foreground: hsl(213 90% 76%);
   --destructive: hsl(0 68% 52%);
   --destructive-foreground: hsl(0 0% 98%);
-  --border: hsl(160 6% 18%);
-  --input: hsl(160 6% 15%);
-  --ring: hsl(158 70% 40%);
-  --chart-1: hsl(158 65% 45%);
-  --chart-2: hsl(217 80% 58%);
-  --chart-3: hsl(262 60% 58%);
+  --border: hsl(224 16% 18%);
+  --input: hsl(224 16% 15%);
+  --ring: hsl(213 90% 60%);
+  --chart-1: hsl(213 85% 60%);
+  --chart-2: hsl(174 60% 45%);
+  --chart-3: hsl(262 60% 62%);
   --chart-4: hsl(25 90% 55%);
-  --chart-5: hsl(340 70% 55%);
-  --sidebar: hsl(160 8% 9%);
-  --sidebar-foreground: hsl(0 0% 72%);
-  --sidebar-primary: hsl(158 70% 40%);
+  --chart-5: hsl(340 70% 58%);
+  --sidebar: hsl(224 24% 10%);
+  --sidebar-foreground: hsl(0 0% 70%);
+  --sidebar-primary: hsl(213 90% 60%);
   --sidebar-primary-foreground: hsl(0 0% 100%);
-  --sidebar-accent: hsl(158 18% 14%);
+  --sidebar-accent: hsl(217 50% 15%);
   --sidebar-accent-foreground: hsl(0 0% 92%);
-  --sidebar-border: hsl(160 6% 15%);
-  --sidebar-ring: hsl(158 70% 40%);
-  --banner: hsl(158 60% 22%);
+  --sidebar-border: hsl(224 16% 15%);
+  --sidebar-ring: hsl(213 90% 60%);
+  --banner: hsl(224 62% 16%);
   --banner-foreground: hsl(0 0% 100%);
+  --color-paper: var(--background);
+  --color-ink: var(--foreground);
+  --color-muted: var(--muted-foreground);
+  --color-rule: var(--border);
+  --color-accent: var(--primary);
+  --color-bg: var(--background);
+  --color-fg: var(--foreground);
+  --color-fg-muted: var(--muted-foreground);
+  --color-border: var(--border);
   --font-sans: var(--font-inter), ui-sans-serif, system-ui, sans-serif;
   --font-serif: ui-serif, Georgia, Cambria, "Times New Roman", Times, serif;
   --font-mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
@@ -220,25 +242,89 @@
 }
 
 .promo-card-bg {
-  background: linear-gradient(135deg, hsl(158 85% 18%) 0%, hsl(158 100% 27%) 100%);
+  background:
+    radial-gradient(120% 140% at 85% 10%, hsl(217 88% 55% / 0.35) 0%, transparent 55%),
+    radial-gradient(100% 120% at 10% 90%, hsl(174 70% 40% / 0.25) 0%, transparent 50%),
+    linear-gradient(135deg, hsl(224 62% 20%) 0%, hsl(224 62% 14%) 100%);
 }
 
 .sparkline {
-  background: linear-gradient(180deg, hsl(158 100% 27% / 0.12) 0%, hsl(158 100% 27% / 0.02) 100%);
+  background: linear-gradient(180deg, hsl(217 88% 50% / 0.14) 0%, hsl(217 88% 50% / 0.02) 100%);
   border-radius: 8px;
 }
 
 .card-hover {
-  transition: transform 0.2s ease, box-shadow 0.2s ease;
+  transition: transform 0.2s ease, box-shadow 0.2s ease, border-color 0.2s ease;
 }
 .card-hover:hover {
   transform: translateY(-2px);
   box-shadow: var(--shadow-md);
+  border-color: color-mix(in oklab, var(--primary) 30%, var(--border));
 }
 
-/* Pastel metric card surfaces (LMS Accel style) */
+/* Inspo editorial primitives — stat-row / stat-grid / bento / bar-chart / nav-inline */
+.font-display {
+  font-family: var(--font-sans);
+  letter-spacing: -0.025em;
+  font-weight: 700;
+}
+
+.text-meta {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.rule {
+  border-color: var(--border);
+}
+
+.wrap {
+  width: 100%;
+  max-width: 80rem;
+  margin-inline: auto;
+  padding-inline: 24px;
+}
+
+.section-rhythm {
+  padding-block: clamp(24px, 4vw, 48px);
+}
+
+.stat-num {
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.03em;
+  line-height: 1;
+}
+
+.bento-tile {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--card);
+  transition: background-color 0.2s ease, border-color 0.2s ease, transform 0.2s ease, box-shadow 0.2s ease;
+}
+.bento-tile:hover {
+  border-color: color-mix(in oklab, var(--primary) 28%, var(--border));
+  box-shadow: var(--shadow-sm);
+}
+
+.bar-track {
+  height: 4px;
+  width: 100%;
+  border-radius: 9999px;
+  background: color-mix(in oklab, var(--foreground) 8%, transparent);
+  overflow: hidden;
+}
+.bar-fill {
+  height: 100%;
+  border-radius: inherit;
+  background: var(--primary);
+}
+
+/* Pastel metric accents — cool SaaS set (kept for tone prop, re-hued to blue family) */
 .stat-card-blue {
-  background: hsl(210 100% 97%);
+  background: hsl(214 100% 97%);
   color: hsl(217 80% 40%);
 }
 .stat-card-purple {
@@ -250,15 +336,15 @@
   color: hsl(350 70% 42%);
 }
 .stat-card-green {
-  background: hsl(152 60% 95%);
-  color: hsl(158 80% 28%);
+  background: hsl(170 60% 95%);
+  color: hsl(172 70% 28%);
 }
 .stat-card-amber {
   background: hsl(42 100% 95%);
   color: hsl(32 90% 38%);
 }
 .stat-card-slate {
-  background: hsl(210 20% 96%);
+  background: hsl(214 20% 96%);
   color: hsl(215 16% 40%);
 }
 
@@ -275,8 +361,8 @@
   color: hsl(350 80% 78%);
 }
 .dark .stat-card-green {
-  background: hsl(158 25% 14%);
-  color: hsl(152 60% 70%);
+  background: hsl(174 30% 14%);
+  color: hsl(170 60% 72%);
 }
 .dark .stat-card-amber {
   background: hsl(42 30% 14%);
