@@ -42,7 +42,7 @@ class Settings(BaseSettings):
     email_host_user: str = ""
     email_host_password: str = ""
     email_use_tls: bool = True
-    default_from_email: str = "DemandAccel <noreply@localhost>"
+    default_from_email: str = "JOBDESK-AI <noreply@localhost>"
 
     # JWT
     jwt_access_cookie: str = "da_access"

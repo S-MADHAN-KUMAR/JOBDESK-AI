@@ -65,7 +65,7 @@ export function Navbar({
             </div>
           ) : (
             <p className="truncate text-sm text-muted-foreground lg:hidden">
-              DemandAccel AI
+              JOBDESK-AI
             </p>
           )}
         </div>

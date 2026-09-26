@@ -1,6 +1,5 @@
 import type { Metadata } from "next";
 import { Inter } from "next/font/google";
-import Script from "next/script";
 import "./globals.css";
 import { ThemeProvider } from "@/components/theme-provider";
 import { QueryProvider } from "@/components/query-provider";
@@ -15,8 +14,8 @@ const inter = Inter({
 const themeInitScript = `(function(){try{var t=localStorage.getItem('demandaccel_theme');if(t==='dark'||(!t&&window.matchMedia('(prefers-color-scheme: dark)').matches)){document.documentElement.classList.add('dark')}}catch(e){}})();`;
 
 export const metadata: Metadata = {
-  title: "DemandAccel AI - Dashboard",
-  description: "Demand acceleration platform with role-based access control",
+  title: "JOBDESK-AI - Dashboard",
+  description: "JOBDESK-AI platform with role-based access control",
 };
 
 export default function RootLayout({ children }: LayoutProps<"/">) {
@@ -26,10 +25,14 @@ export default function RootLayout({ children }: LayoutProps<"/">) {
       suppressHydrationWarning
       className={`${inter.variable} h-full antialiased`}
     >
+      <head>
+        <script
+          dangerouslySetInnerHTML={{
+            __html: themeInitScript,
+          }}
+        />
+      </head>
       <body className="flex min-h-full flex-col font-sans antialiased">
-        <Script id="theme-init" strategy="beforeInteractive">
-          {themeInitScript}
-        </Script>
         <ThemeProvider>
           <QueryProvider>
             {children}

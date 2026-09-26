@@ -306,7 +306,7 @@ function SidebarNav({
   }
 
   const logoSrc =
-    theme === "dark" ? "/image.png" : "/image.png"
+    theme === "dark" ? "/logo.png" : "/logo.png"
 
   return (
     <div className="flex h-full flex-col bg-sidebar">
@@ -317,10 +317,10 @@ function SidebarNav({
       >
         <img
           src={logoSrc}
-          alt="DemandAccel AI"
+          alt="JOBDESK-AI"
           className="h-8 w-auto object-contain"
         />
-        <h1 className="text-2xl font-bold text-[#27A77C]"> emand Accel</h1>
+        <h1 className="text-2xl font-bold text-[#27A77C]">JOBDESK-AI</h1>
       </Link>
 
       <nav className="flex flex-1 flex-col gap-5 overflow-y-auto px-3 pb-3 pt-1">

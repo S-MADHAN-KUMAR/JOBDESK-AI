@@ -57,14 +57,14 @@ def send_password_link(user, *, invite: bool = False) -> None:
     token = default_token_generator.make_token(user)
     link = frontend_url(f'/reset-password?uid={uid}&token={token}')
     if invite:
-        subject = 'You have been invited to DemandAccel AI'
+        subject = 'You have been invited to JOBDESK-AI'
         body = (
             f'Hi {user.first_name or user.username},\n\n'
-            f'An administrator created a DemandAccel account for you.\n'
+            f'An administrator created a JOBDESK-AI account for you.\n'
             f'Set your password here (link expires after use):\n{link}\n'
         )
     else:
-        subject = 'Reset your DemandAccel password'
+        subject = 'Reset your JOBDESK-AI password'
         body = (
             f'Hi {user.first_name or user.username},\n\n'
             f'We received a password reset request. If this was you, open:\n{link}\n\n'

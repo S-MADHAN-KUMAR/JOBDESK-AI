@@ -262,9 +262,9 @@ EMAIL_USE_TLS = env.bool('EMAIL_USE_TLS', default=True)
 DEFAULT_FROM_EMAIL = env(
     'DEFAULT_FROM_EMAIL',
     default=(
-        'DemandAccel <onboarding@resend.dev>'
+        'JOBDESK-AI <onboarding@resend.dev>'
         if RESEND_API_KEY
-        else 'DemandAccel <noreply@localhost>'
+        else 'JOBDESK-AI <noreply@localhost>'
     ),
 )
 FRONTEND_URL = env('FRONTEND_URL', default='http://localhost:3000')
